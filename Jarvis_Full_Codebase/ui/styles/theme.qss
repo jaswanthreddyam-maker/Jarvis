@@ -1,0 +1,257 @@
+QWidget {
+    background: #0b0f14;
+    color: #ece5d8;
+    font-family: "Segoe UI", "Bahnschrift", sans-serif;
+    font-size: 13px;
+}
+
+#rootWindow {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0b0f14,
+        stop:0.45 #10151d,
+        stop:1 #111821);
+}
+
+#topBar,
+#heroPanel,
+#panel {
+    background: rgba(17, 22, 30, 0.94);
+    border: 1px solid rgba(184, 155, 92, 0.14);
+    border-radius: 18px;
+}
+
+#windowTitle {
+    font-family: "Bahnschrift SemiBold", "Segoe UI";
+    font-size: 20px;
+    letter-spacing: 1.6px;
+    color: #f5efe4;
+}
+
+#windowSubtitle {
+    color: #96a0aa;
+    font-size: 12px;
+}
+
+#sectionEyebrow {
+    color: #b89b5c;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+}
+
+#panelTitle {
+    color: #f5efe4;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+#subsectionTitle {
+    color: #d1c2a3;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+}
+
+#heroTitle {
+    font-family: "Georgia", "Times New Roman", serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: #faf6ef;
+}
+
+#heroSubtitle,
+#mutedText {
+    color: #9ea7b1;
+    line-height: 1.5;
+}
+
+#statusBadge {
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.9px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#statusBadge[tone="muted"] {
+    color: #b3bac2;
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+#statusBadge[tone="success"] {
+    color: #d8f2db;
+    border-color: rgba(113, 163, 115, 0.32);
+    background: rgba(89, 125, 89, 0.18);
+}
+
+#statusBadge[tone="warning"] {
+    color: #f3dfb5;
+    border-color: rgba(184, 155, 92, 0.36);
+    background: rgba(184, 155, 92, 0.16);
+}
+
+#statusBadge[tone="accent"] {
+    color: #f5ede0;
+    border-color: rgba(197, 172, 128, 0.38);
+    background: rgba(134, 111, 72, 0.22);
+}
+
+#statusBadge[tone="danger"] {
+    color: #ffd7d1;
+    border-color: rgba(174, 87, 74, 0.42);
+    background: rgba(140, 62, 53, 0.18);
+}
+
+QPushButton {
+    border-radius: 14px;
+    padding: 11px 18px;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+#primaryButton {
+    background: rgba(184, 155, 92, 0.24);
+    color: #f4ecdf;
+    border-color: rgba(184, 155, 92, 0.42);
+}
+
+#primaryButton:hover {
+    background: rgba(184, 155, 92, 0.32);
+}
+
+#secondaryButton {
+    background: rgba(255, 255, 255, 0.04);
+    color: #ece5d8;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+#secondaryButton:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+#dangerButton {
+    background: rgba(131, 57, 48, 0.22);
+    color: #ffd7d1;
+    border-color: rgba(174, 87, 74, 0.42);
+}
+
+#dangerButton:hover {
+    background: rgba(131, 57, 48, 0.3);
+}
+
+QTextBrowser,
+QPlainTextEdit,
+QComboBox {
+    background: rgba(8, 11, 16, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 10px 12px;
+    selection-background-color: rgba(184, 155, 92, 0.28);
+}
+
+#historyView {
+    color: #ece5d8;
+}
+
+#logsView {
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+#transcriptCard {
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #f2ede5;
+}
+
+#assistantResponse {
+    background: rgba(184, 155, 92, 0.08);
+    border: 1px solid rgba(184, 155, 92, 0.14);
+    border-radius: 14px;
+    padding: 14px 16px;
+    color: #faf6ef;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+#metricTile {
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+}
+
+#metricLabel {
+    color: #9ea7b1;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.0px;
+}
+
+#metricValue {
+    color: #f8f3ea;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+#runtimeStatus {
+    color: #c9ced4;
+    font-size: 12px;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: rgba(184, 155, 92, 0.28);
+    min-height: 32px;
+    border-radius: 5px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+#toastCard {
+    background: rgba(12, 16, 22, 0.98);
+    border-radius: 16px;
+    border: 1px solid rgba(184, 155, 92, 0.18);
+}
+
+#toastCard[tone="info"] {
+    border-color: rgba(184, 155, 92, 0.22);
+}
+
+#toastCard[tone="warning"] {
+    border-color: rgba(202, 169, 90, 0.34);
+}
+
+#toastCard[tone="error"] {
+    border-color: rgba(174, 87, 74, 0.42);
+}
+
+#toastTitle {
+    color: #f5efe4;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+#toastMessage {
+    color: #d6d0c6;
+    line-height: 1.45;
+}

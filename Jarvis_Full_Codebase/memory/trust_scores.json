@@ -1,0 +1,26 @@
+{
+  "open_app": {
+    "score": 0.9,
+    "last_used": 1776587733.3748496
+  },
+  "web_search": {
+    "score": 0.9,
+    "last_used": 1776587733.3748496
+  },
+  "install_app": {
+    "score": 0.0,
+    "last_used": 1776590258.3047707
+  },
+  "run_command": {
+    "score": 0.3,
+    "last_used": 1776587733.3748496
+  },
+  "system_config": {
+    "score": 0.1,
+    "last_used": 1776587733.3748496
+  },
+  "file_deletion": {
+    "score": 0.0,
+    "last_used": 1776587733.3748496
+  }
+}

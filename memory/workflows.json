@@ -1,0 +1,12 @@
+{
+  "install_app": {
+    "task": "install_app",
+    "os": "Windows",
+    "os_release": "11",
+    "steps": [
+      "winget install python"
+    ],
+    "success": true,
+    "created_at": 1776590258.390351
+  }
+}

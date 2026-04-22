@@ -1,0 +1,333 @@
+{
+  "legacy_tasks": {},
+  "patterns": [
+    {
+      "pattern": "open youtube and search <query>",
+      "normalized_goal": "open youtube and search for free fire edits.",
+      "context": {
+        "normalized_goal": "open youtube and search for free fire edits.",
+        "platforms": [
+          "youtube"
+        ],
+        "browsers": [],
+        "actions": [
+          "open_url",
+          "search_youtube"
+        ]
+      },
+      "intent_nuance": {
+        "intent_meaning": "direct_command",
+        "platform": "",
+        "open_explicit": true,
+        "search_explicit": false,
+        "expression_style": "explicit_open"
+      },
+      "slot_semantics": {
+        "query": {
+          "name": "query",
+          "value": "free fire edits",
+          "query_type": "keyword_phrase",
+          "intent_meaning": "direct_command",
+          "is_reference": false
+        }
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "open_url",
+          "target": "youtube",
+          "params": {
+            "url": "https://www.youtube.com",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          }
+        },
+        {
+          "step_id": 2,
+          "action": "search_youtube",
+          "target": "<query>",
+          "params": {
+            "query": "<query>",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          },
+          "depends_on": [
+            1
+          ]
+        }
+      ],
+      "created_at": 1776679927.0262284,
+      "last_used_at": 1776759926.064741,
+      "successful_runs": 1,
+      "failed_runs": 0,
+      "use_count": 3,
+      "confidence": 0.6666666666666666
+    },
+    {
+      "pattern": "open youtube and search <query>",
+      "normalized_goal": "open youtube and search ai videos.",
+      "context": {
+        "normalized_goal": "open youtube and search ai videos.",
+        "platforms": [
+          "youtube"
+        ],
+        "browsers": [],
+        "actions": [
+          "open_url",
+          "search_youtube"
+        ]
+      },
+      "intent_nuance": {
+        "intent_meaning": "direct_command",
+        "platform": "",
+        "open_explicit": true,
+        "search_explicit": false,
+        "expression_style": "explicit_open"
+      },
+      "slot_semantics": {
+        "query": {
+          "name": "query",
+          "value": "ai videos.",
+          "query_type": "keyword_phrase",
+          "intent_meaning": "direct_command",
+          "is_reference": false
+        }
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "open_url",
+          "target": "youtube",
+          "params": {
+            "url": "https://www.youtube.com",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          }
+        },
+        {
+          "step_id": 2,
+          "action": "search_youtube",
+          "target": "<query>",
+          "params": {
+            "query": "<query>",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          },
+          "depends_on": [
+            1
+          ]
+        }
+      ],
+      "created_at": 1776705426.7473762,
+      "last_used_at": 1776705426.7473762,
+      "successful_runs": 3,
+      "failed_runs": 0,
+      "use_count": 0,
+      "confidence": 0.8
+    },
+    {
+      "pattern": "open whatsapp and search <query>",
+      "normalized_goal": "open whatsapp and search joshua.",
+      "context": {
+        "normalized_goal": "open whatsapp and search joshua.",
+        "platforms": [],
+        "browsers": [],
+        "actions": [
+          "open_app",
+          "search_web"
+        ]
+      },
+      "intent_nuance": {
+        "intent_meaning": "direct_command",
+        "platform": "",
+        "open_explicit": true,
+        "search_explicit": false,
+        "expression_style": "explicit_open"
+      },
+      "slot_semantics": {
+        "query": {
+          "name": "query",
+          "value": "joshua",
+          "query_type": "keyword_phrase",
+          "intent_meaning": "direct_command",
+          "is_reference": false
+        }
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "open_app",
+          "target": "whatsapp",
+          "params": {
+            "app_name": "whatsapp",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          }
+        },
+        {
+          "step_id": 2,
+          "action": "search_web",
+          "target": "<query>",
+          "params": {
+            "query": "<query>",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          },
+          "depends_on": [
+            1
+          ]
+        }
+      ],
+      "created_at": 1776836491.8869107,
+      "last_used_at": 1776836491.8869107,
+      "successful_runs": 1,
+      "failed_runs": 0,
+      "use_count": 0,
+      "confidence": 0.6666666666666666
+    },
+    {
+      "pattern": "open whatsapp and search <query>",
+      "normalized_goal": "open whatsapp",
+      "context": {
+        "normalized_goal": "open whatsapp",
+        "platforms": [],
+        "browsers": [],
+        "actions": [
+          "open_app",
+          "search_web"
+        ]
+      },
+      "intent_nuance": {
+        "intent_meaning": "direct_command",
+        "platform": "",
+        "open_explicit": true,
+        "search_explicit": false,
+        "expression_style": "explicit_open"
+      },
+      "slot_semantics": {
+        "query": {
+          "name": "query",
+          "value": "joshua",
+          "query_type": "keyword_phrase",
+          "intent_meaning": "direct_command",
+          "is_reference": false
+        }
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "open_app",
+          "target": "whatsapp",
+          "params": {
+            "app_name": "whatsapp",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          }
+        },
+        {
+          "step_id": 2,
+          "action": "search_web",
+          "target": "<query>",
+          "params": {
+            "query": "<query>",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          },
+          "depends_on": [
+            1
+          ]
+        }
+      ],
+      "created_at": 1776836510.17688,
+      "last_used_at": 1776836510.17688,
+      "successful_runs": 2,
+      "failed_runs": 0,
+      "use_count": 0,
+      "confidence": 0.75
+    },
+    {
+      "pattern": "open whatsapp and search <query>",
+      "normalized_goal": "open whatsapp",
+      "context": {
+        "normalized_goal": "open whatsapp",
+        "platforms": [],
+        "browsers": [],
+        "actions": [
+          "search_web"
+        ]
+      },
+      "intent_nuance": {
+        "intent_meaning": "direct_command",
+        "platform": "",
+        "open_explicit": true,
+        "search_explicit": false,
+        "expression_style": "explicit_open"
+      },
+      "slot_semantics": {
+        "query": {
+          "name": "query",
+          "value": "joshua",
+          "query_type": "keyword_phrase",
+          "intent_meaning": "direct_command",
+          "is_reference": false
+        }
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "search_web",
+          "target": "whatsapp",
+          "params": {
+            "query": "whatsapp"
+          }
+        },
+        {
+          "step_id": 2,
+          "action": "search_web",
+          "target": "<query>",
+          "params": {
+            "query": "<query>",
+            "_scope": "single",
+            "_safety_level": "SAFE",
+            "_confirmation_level": 0,
+            "_validation_reason": "Validated.",
+            "_estimated_items": 1
+          },
+          "depends_on": [
+            1
+          ]
+        }
+      ],
+      "created_at": 1776836565.3898077,
+      "last_used_at": 1776836565.3898077,
+      "successful_runs": 1,
+      "failed_runs": 0,
+      "use_count": 0,
+      "confidence": 0.6666666666666666
+    }
+  ]
+}

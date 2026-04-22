@@ -1,0 +1,132 @@
+{
+  "nodes": [
+    {
+      "id": "concept:ai",
+      "type": "domain",
+      "label": "Artificial Intelligence",
+      "metadata": {}
+    },
+    {
+      "id": "concept:ml",
+      "type": "domain",
+      "label": "Machine Learning",
+      "metadata": {}
+    },
+    {
+      "id": "technology:python",
+      "type": "technology",
+      "label": "Python",
+      "metadata": {}
+    },
+    {
+      "id": "concept:neural_networks",
+      "type": "concept",
+      "label": "Neural Networks",
+      "metadata": {}
+    },
+    {
+      "id": "concept:quantum_physics",
+      "type": "concept",
+      "label": "Quantum Physics",
+      "metadata": {}
+    },
+    {
+      "id": "concept:study",
+      "type": "concept",
+      "label": "Study",
+      "metadata": {}
+    },
+    {
+      "id": "concept:level_it",
+      "type": "concept",
+      "label": "Level It",
+      "metadata": {}
+    },
+    {
+      "id": "concept:memory_graph",
+      "type": "concept",
+      "label": "Memory Graph",
+      "metadata": {}
+    },
+    {
+      "id": "concept:applications_detects",
+      "type": "concept",
+      "label": "Applications Detects",
+      "metadata": {}
+    },
+    {
+      "id": "concept:usage_displaying",
+      "type": "concept",
+      "label": "Usage Displaying",
+      "metadata": {}
+    },
+    {
+      "id": "concept:processes",
+      "type": "concept",
+      "label": "Processes",
+      "metadata": {}
+    },
+    {
+      "id": "concept:recursion",
+      "type": "concept",
+      "label": "Recursion",
+      "metadata": {}
+    },
+    {
+      "id": "concept:that_stops",
+      "type": "concept",
+      "label": "That Stops",
+      "metadata": {}
+    },
+    {
+      "id": "concept:breaking_them",
+      "type": "concept",
+      "label": "Breaking Them",
+      "metadata": {}
+    },
+    {
+      "id": "concept:until_it",
+      "type": "concept",
+      "label": "Until It",
+      "metadata": {}
+    }
+  ],
+  "edges": [
+    {
+      "source": "concept:ml",
+      "target": "concept:ai",
+      "type": "part_of",
+      "weight": 1.0
+    },
+    {
+      "source": "technology:python",
+      "target": "concept:ai",
+      "type": "used_for",
+      "weight": 1.0
+    },
+    {
+      "source": "concept:neural_networks",
+      "target": "concept:ml",
+      "type": "part_of",
+      "weight": 1.0
+    },
+    {
+      "source": "concept:quantum_physics",
+      "target": "concept:study",
+      "type": "related_to",
+      "weight": 0.7
+    },
+    {
+      "source": "concept:memory_graph",
+      "target": "concept:applications_detects",
+      "type": "related_to",
+      "weight": 0.7
+    },
+    {
+      "source": "concept:recursion",
+      "target": "concept:that_stops",
+      "type": "related_to",
+      "weight": 0.7
+    }
+  ]
+}

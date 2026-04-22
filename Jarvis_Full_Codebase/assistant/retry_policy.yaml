@@ -1,0 +1,19 @@
+{
+  "default": {
+    "max_attempts": 1
+  },
+  "policies": {
+    "open_url": {
+      "max_attempts": 2
+    },
+    "search_web": {
+      "max_attempts": 2
+    },
+    "open_app": {
+      "max_attempts": 1
+    },
+    "set_reminder": {
+      "max_attempts": 1
+    }
+  }
+}

@@ -1,0 +1,15 @@
+default: allow
+actions:
+  file_op: deny
+  delete_file: confirm_required
+  overwrite_file: confirm_required
+  run_code: confirm_required
+  run_command: confirm_required
+  execute_desktop_workflow: confirm_required
+  install_app: confirm_required
+  registry_change: deny
+  registry_changes: deny
+  shell_exec: confirm_required
+  shell_execution: confirm_required
+  system_action: confirm_required
+  system_shutdown: deny

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+assistant/config/.env
+assistant/memory/*.db
+.venv/
+logs/
+.vscode/
+*.zip
+output.wav
+.tmp/
+scratch/
