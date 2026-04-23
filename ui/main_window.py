@@ -29,7 +29,7 @@ from ui.panels.settings_panel import SettingsPanel
 from ui.panels.transcript_panel import TranscriptPanel
 from ui.panels.logs_viewer import LogsViewerDialog
 from ui.state import AppState, Status
-from assistant.event_bus import bus, Events
+from jarvis.event_bus import bus, Events
 from ui.widgets.status_badge import StatusBadge
 from ui.widgets.toast import ToastManager
 
@@ -115,11 +115,11 @@ class JarvisMainWindow(QMainWindow):
         top_bar = self._build_top_bar()
         root.addWidget(top_bar)
 
-        self.mock_banner = QLabel("MOCK MODE: Assistant backend is offline. Running with limited mock interactions.")
-        self.mock_banner.setStyleSheet("background-color: #b89b5c; color: #12171d; font-weight: bold; padding: 6px; border-radius: 4px;")
-        self.mock_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mock_banner.hide()
-        root.addWidget(self.mock_banner)
+        self.backend_banner = QLabel("BACKEND OFFLINE: Start the Jarvis API service before using the desktop client.")
+        self.backend_banner.setStyleSheet("background-color: #b89b5c; color: #12171d; font-weight: bold; padding: 6px; border-radius: 4px;")
+        self.backend_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.backend_banner.hide()
+        root.addWidget(self.backend_banner)
 
         self.hero = self._build_hero()
         root.addWidget(self.hero)
@@ -278,6 +278,7 @@ class JarvisMainWindow(QMainWindow):
         # Overlay interactive controls → bridge
         self.overlay.interrupt_requested.connect(self.bridge.interrupt)
         self.overlay.cancel_requested.connect(self.bridge.cancel_active)
+        self.overlay.start_requested.connect(self.bridge.start_listening)
         self.overlay.text_submitted.connect(self.bridge.submit_text)
         self.bridge.text_response_ready.connect(self.overlay.show_response)
 
@@ -421,17 +422,13 @@ class JarvisMainWindow(QMainWindow):
     def _on_backend_online_changed(self, online: bool) -> None:
         text = "Backend Online" if online else "Backend Offline"
         self.backend_badge.set_text(text, _tone_for_status(text))
-        
-        is_mock = self.state.model_status.get("backend") == "Mock"
-        self.mock_banner.setVisible(is_mock)
+        self.backend_banner.setVisible(not online)
         self._update_slim_status()
 
     def _on_model_status_changed(self, model_status: dict[str, str]) -> None:
         asr_text = f"Whisper {model_status.get('asr', 'Unknown')}"
         self.model_badge.set_text(asr_text, _tone_for_status(asr_text))
-        
-        is_mock = model_status.get("backend") == "Mock"
-        self.mock_banner.setVisible(is_mock)
+        self.backend_banner.setVisible(not self.state.backend_online)
         self._update_slim_status()
 
     def _on_safety_feedback_changed(self, payload: dict[str, str]) -> None:
@@ -535,7 +532,7 @@ class JarvisMainWindow(QMainWindow):
     def _on_clear_memory(self) -> None:
         """Clear the memory graph (privacy action)."""
         try:
-            from assistant.memory_graph import graph
+            from jarvis.memory_graph import graph
             graph.clear_all()
             self.state.push_toast("Memory Cleared", "All learned patterns have been wiped.", "info")
             self.state.add_log("Memory graph cleared by user.", source="Intelligence")
@@ -552,7 +549,7 @@ class JarvisMainWindow(QMainWindow):
         self.state.add_log("Voice enrollment started.", source="Intelligence")
         # Trigger enrollment via bridge
         try:
-            from assistant.voice_identity import voice_id
+            from jarvis.voice_identity import voice_id
             if voice_id.is_enrolled:
                 voice_id.clear_enrollment()
             # The actual enrollment happens when audio is captured by the wake listener.

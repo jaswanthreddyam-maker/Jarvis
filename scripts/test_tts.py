@@ -5,7 +5,7 @@ import os
 os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = r"C:\Program Files\eSpeak NG\libespeak-ng.dll"
 os.environ["PATH"] = r"C:\Program Files\eSpeak NG;" + os.environ.get("PATH", "")
 
-from assistant.voice.tts import TTS
+from jarvis.voice.tts import TTS
 
 print("=" * 40)
 print("  TTS PLAYBACK TEST")

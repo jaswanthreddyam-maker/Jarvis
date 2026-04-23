@@ -20,7 +20,7 @@ sys.path.append(str(PROJECT_ROOT))
 logger = logging.getLogger("Jarvis.UI")
 RELAUNCH_MARKER = "JARVIS_VENV_RELAUNCHED"
 
-from assistant.runtime_bootstrap import ensure_project_runtime
+from jarvis.runtime_bootstrap import ensure_project_runtime
 
 if TYPE_CHECKING:
     from PySide6.QtCore import QTimer, Qt
@@ -143,7 +143,7 @@ class JarvisApp:
         from ui.state import state
         from ui.backend_bridge import JarvisBackendBridge
         from ui.main_window import JarvisMainWindow
-        from assistant.lifecycle_manager import LifecycleManager
+        from jarvis.lifecycle_manager import LifecycleManager
         
         self.state = state
         self.bridge = JarvisBackendBridge(state)
@@ -185,12 +185,15 @@ def main() -> None:
     if _maybe_relaunch_in_project_venv():
         return
 
-    from assistant.logger import setup_persistent_logging
+    from jarvis.logger import setup_persistent_logging
     setup_persistent_logging()
     log_runtime_diagnostics()
-    
-    jarvis = JarvisApp()
-    sys.exit(jarvis.bootstrap(background=_BACKGROUND))
+    try:
+        jarvis = JarvisApp()
+        sys.exit(jarvis.bootstrap(background=_BACKGROUND))
+    except Exception:
+        logger.exception("UI bootstrap failed.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,8 @@ import time
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
-from assistant.runtime_config import get_audio_config
+from jarvis.interfaces.wake_word import contains_wake_phrase, extract_command_after_wake
+from jarvis.runtime_config import get_audio_config
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -107,11 +108,9 @@ class ASRWorker(QObject):
             if text:
                 # Route live transcription to debug logs only
                 self.log.emit("ASR_LOOP", f"transcription: {text}")
-                if "jarvis" in text:
-                    self.log.emit("ASR", "[ASR WAKE] detected keyword: jarvis")
-                    import re
-                    command = re.sub(r'\b(hey jarvis|hi jarvis|jarvis)\b', '', text, flags=re.IGNORECASE).strip()
-                    command = re.sub(r'^[^a-z0-9]+', '', command).strip()
+                if contains_wake_phrase(text):
+                    self.log.emit("ASR", "[ASR WAKE] detected wake phrase")
+                    command = extract_command_after_wake(text)
                     self.wake_detected.emit(command)
         except Exception as exc:
             self.log.emit("ASR", f"Stream process error: {exc}")

@@ -8,12 +8,13 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from ui.state import AppState, Status
 from ui.workers.asr_worker import ASRWorker
 from ui.workers.backend_worker import BackendWorker
-from assistant.voice.wake_listener import WakeListener
+from jarvis.interfaces.wake_word import route_voice_transcript
+from jarvis.voice.wake_listener import WakeListener
 from ui.workers.metrics_worker import MetricsWorker
 from ui.workers.tts_worker import TTSWorker
-from assistant.global_state import global_state
-from assistant.event_bus import bus
-from assistant.runtime_config import get_audio_config
+from jarvis.global_state import global_state
+from jarvis.event_bus import bus, Events
+from jarvis.runtime_config import get_audio_config
 
 
 @dataclass(slots=True)
@@ -464,7 +465,7 @@ class JarvisBackendBridge(QObject):
     @Slot()
     def _on_asr_timeout(self) -> None:
         if self.state.status == Status.RECOGNIZING:
-            self.state.add_log("[FAILSAFE] ASR timed out (>3s). Restarting ASRWorker.", source="System")
+            self.state.add_log("[FAILSAFE] ASR timed out (>30s). Restarting ASRWorker.", source="System")
             self._cancel_active_request()
             self.restart_module("ASRWorker")
             self._set_status(Status.IDLE)
@@ -474,7 +475,7 @@ class JarvisBackendBridge(QObject):
     @Slot()
     def _on_pipeline_timeout(self) -> None:
         if self.state.status in {Status.RECOGNIZING, Status.THINKING, Status.PROCESSING, Status.EXECUTING}:
-            self.state.add_log("[FAILSAFE] Pipeline timed out (>5s). Resetting system.", source="System")
+            self.state.add_log("[FAILSAFE] Pipeline timed out (>120s). Resetting system.", source="System")
             if self._active_request_id is not None:
                 context = self._request_contexts.get(self._active_request_id)
                 if context is not None and context.origin == "text":
@@ -527,12 +528,12 @@ class JarvisBackendBridge(QObject):
         
         # Manage failsafe timers (main thread only)
         if status == Status.RECOGNIZING:
-            self._asr_timer.start(3000)
-            self._pipeline_timer.start(5000)
+            self._asr_timer.start(30000)
+            self._pipeline_timer.start(120000)
         elif status in {Status.THINKING, Status.PROCESSING, Status.EXECUTING}:
             if self._asr_timer.isActive():
                 self._asr_timer.stop()
-            self._pipeline_timer.start(5000)
+            self._pipeline_timer.start(120000)
         else:
             if self._asr_timer.isActive():
                 self._asr_timer.stop()
@@ -571,13 +572,10 @@ class JarvisBackendBridge(QObject):
     def _on_backend_ready(self, payload: dict[str, Any]) -> None:
         status = payload.get("status", "Unknown")
         self.state.set_model_status("backend", status)
-        online = status in {"Ready", "Mock"}
+        online = status == "Ready"
         self.safe_mode_changed.emit(bool(payload.get("safe_mode", False)))
         self.state.set_backend_online(online)
-        if status == "Mock":
-            self.state.push_toast("Mock Mode", "Backend is unavailable. Jarvis is running in desktop mock mode.", "warning")
-            self.state.add_log("Backend entered mock mode.", source="Bridge")
-        elif not online:
+        if not online:
             self._handle_error("Backend", str(payload.get("error", "Backend unavailable.")))
         else:
             self.state.add_log("Backend is online. Starting TTS...", source="Bridge")
@@ -620,7 +618,7 @@ class JarvisBackendBridge(QObject):
         if self._enrollment_mode:
             try:
                 import numpy as np
-                from assistant.voice_identity import voice_id
+                from jarvis.voice_identity import voice_id
                 audio = np.asarray(payload_data.get("audio", []), dtype=np.float32)
                 done = voice_id.add_enrollment_sample(audio, sample_rate=16000)
                 self._enrollment_count += 1
@@ -634,8 +632,8 @@ class JarvisBackendBridge(QObject):
                         "info",
                     )
                     self.state.add_log("Voice enrollment complete.", source="VoiceID")
-                    from assistant.event_bus import bus as event_bus
-                    from assistant.event_bus import Events
+                    from jarvis.event_bus import bus as event_bus
+                    from jarvis.event_bus import Events
                     event_bus.publish_async(Events.VOICE_ENROLLED, {})
                 else:
                     self.state.push_toast(
@@ -668,7 +666,7 @@ class JarvisBackendBridge(QObject):
             return
             
         self._last_activation_time = now
-        self.state.add_log("[ASR WAKE] detected keyword: jarvis", source="ASR")
+        self.state.add_log("[ASR WAKE] detected wake phrase", source="ASR")
         
         if command:
             self.state.add_log(f"[ASR WAKE] command extracted: {command}", source="ASR")
@@ -696,27 +694,21 @@ class JarvisBackendBridge(QObject):
             self._resume_listening()
             return
 
-        # Check for active window if "jarvis" wasn't already detected by stream
         import time
-        if time.time() - self._last_activation_time > 10.0:
-            # If "jarvis" is in the full transcription, activate anyway
-            if "jarvis" in text.lower():
-                self._last_activation_time = time.time()
-                # Clean text
-                import re
-                text = re.sub(r'\b(hey jarvis|hi jarvis|jarvis)\b', '', text, flags=re.IGNORECASE).strip()
-                text = re.sub(r'^[^a-z0-9]+', '', text).strip()
-                if not text:
-                    self._active_request_id = None
-                    self._resume_listening()
-                    return
-            else:
-                self._active_request_id = None
-                self._resume_listening()
-                return
-        else:
-            # Still in window, reset timer for next follow-up
-            self._last_activation_time = time.time()
+        now = time.time()
+        wake_decision = route_voice_transcript(
+            text,
+            in_wake_window=now - self._last_activation_time <= 10.0,
+        )
+        if not wake_decision.accepted:
+            self._active_request_id = None
+            self._resume_listening()
+            return
+        if wake_decision.activated or wake_decision.keep_listening:
+            self._last_activation_time = now
+        elif now - self._last_activation_time <= 10.0:
+            self._last_activation_time = now
+        text = wake_decision.command
 
         self._pending_transcripts[request_id] = text
         self._request_contexts[request_id] = _RequestContext(origin="voice", text=text)
@@ -731,22 +723,21 @@ class JarvisBackendBridge(QObject):
         if request_id in self._cancelled_requests or request_id != self._active_request_id:
             return
 
-        context = self._request_contexts.get(request_id)
-        if context is None or context.origin != "text":
-            return
-
         upper = (phase or "").upper()
-        if upper == "EXECUTING":
-            self._set_status(Status.EXECUTING)
-        elif upper == "PROCESSING":
-            self._set_status(Status.PROCESSING)
+        status_map = {
+            "THINKING": Status.THINKING,
+            "PROCESSING": Status.PROCESSING,
+            "EXECUTING": Status.EXECUTING,
+            "RESPONDING": Status.RESPONDING,
+            "CANCELLED": Status.INTERRUPTED,
+            "ERROR": Status.ERROR,
+        }
+        mapped = status_map.get(upper)
+        if mapped is not None:
+            self._set_status(mapped)
 
     def _on_backend_stream_update(self, request_id: int, streamed_text: str, payload: object) -> None:
         if request_id in self._cancelled_requests or request_id != self._active_request_id:
-            return
-
-        context = self._request_contexts.get(request_id)
-        if context is None or context.origin != "text":
             return
 
         text = (streamed_text or "").strip()

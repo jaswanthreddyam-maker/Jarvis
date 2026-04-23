@@ -235,7 +235,7 @@ class IntelligencePanel(QFrame):
         """Refresh voice identity and memory stats."""
         # Voice identity
         try:
-            from assistant.voice_identity import voice_id
+            from jarvis.voice_identity import voice_id
             if voice_id.is_enrolled:
                 mode = voice_id.current_mode
                 if mode == voice_id.Mode.AUTHENTICATED:
@@ -263,7 +263,7 @@ class IntelligencePanel(QFrame):
 
         # Memory graph stats
         try:
-            from assistant.memory_graph import graph
+            from jarvis.memory_graph import graph
             stats = graph.stats()
             nodes = stats.get("total_nodes", 0)
             edges = stats.get("total_edges", 0)
@@ -279,7 +279,7 @@ class IntelligencePanel(QFrame):
         if self._bus_subscribed:
             return
         try:
-            from assistant.event_bus import bus
+            from jarvis.event_bus import bus
 
             bus.subscribe("proactive.suggestion", self._on_suggestion)
             bus.subscribe("proactive.prediction_ready", self._on_prediction)
@@ -291,7 +291,7 @@ class IntelligencePanel(QFrame):
         if not self._bus_subscribed:
             return
         try:
-            from assistant.event_bus import bus
+            from jarvis.event_bus import bus
 
             bus.unsubscribe("proactive.suggestion", self._on_suggestion)
             bus.unsubscribe("proactive.prediction_ready", self._on_prediction)
@@ -319,7 +319,7 @@ class IntelligencePanel(QFrame):
     def _add_suggestion_card(self) -> None:
         """Pull predictions and display as cards."""
         try:
-            from assistant.predictive_engine import predictor
+            from jarvis.predictive_engine import predictor
             predictions = predictor.get_predictions()
         except Exception as e:
             logger.error("Failed to retrieve predictions: %s", e)
@@ -359,7 +359,7 @@ class IntelligencePanel(QFrame):
     def _on_card_accepted(self, action_id: str) -> None:
         self.suggestion_accepted.emit(action_id)
         try:
-            from assistant.proactive_engine import proactive
+            from jarvis.proactive_engine import proactive
             proactive.accept_suggestion(action_id)
         except Exception as e:
             logger.error("Failed to accept suggestion %s: %s", action_id, e)
@@ -370,7 +370,7 @@ class IntelligencePanel(QFrame):
     def _on_card_rejected(self, action_id: str) -> None:
         self.suggestion_rejected.emit(action_id)
         try:
-            from assistant.proactive_engine import proactive
+            from jarvis.proactive_engine import proactive
             proactive.reject_suggestion(action_id)
         except Exception as e:
             logger.error("Failed to reject suggestion %s: %s", action_id, e)

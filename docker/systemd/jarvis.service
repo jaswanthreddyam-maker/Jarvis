@@ -1,0 +1,18 @@
+[Unit]
+Description=Jarvis AI Assistant API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jarvis
+Environment=JARVIS_ENV=production
+Environment=JARVIS_API_ENABLED=true
+Environment=JARVIS_API_HOST=0.0.0.0
+Environment=JARVIS_API_PORT=8000
+ExecStart=/opt/jarvis/.venv/bin/python -m uvicorn jarvis.api.app:create_app --factory --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

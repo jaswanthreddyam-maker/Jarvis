@@ -11,25 +11,22 @@ Taken together, the architecture strongly suggests that the first implementation
 
 ## Implemented in this slice
 
-- `assistant/orchestrator.py`: central controller for `input -> plan -> execute -> respond`
-- `assistant/state_manager.py`: task and step lifecycle tracking
-- `assistant/error_handler.py`: retry policy loading
-- `assistant/action_engine.py`: safe dispatch with policy checks
-- `assistant/actions/` and `assistant/plugins/system_plugin.py`: allowlisted starter tools
-- `assistant/memory/`: SQLite persistence plus session context
-- `assistant/event_bus.py` and `assistant/scheduler.py`: event-driven reminder pipeline
-- `assistant/agents/claude_agent.py`: rule-based planner standing in for future Claude integration
-- `assistant/main.py`: text CLI for running the system today
+- `jarvis/application/orchestrator.py`: central controller for `input -> plan -> execute -> respond`
+- `jarvis/core/executor.py`: validated tool dispatch with safety checks
+- `jarvis/core/planner.py` and `jarvis/core/brain.py`: LLM-driven planning and reflection
+- `jarvis/core/memory/`: short-term, long-term, and semantic memory coordination
+- `jarvis/application/runtime_support.py`: event bus, reminders, and session context tracking
+- `jarvis/api/app.py`: HTTP and websocket server boundary
+- `ui/backend_bridge.py` and `ui/workers/backend_worker.py`: separate-process desktop client transport
 
 ## Deferred intentionally
 
 - wake-word detection
 - real STT / TTS
-- real Claude / Codex / Ollama clients
+- richer model-provider coverage and streaming token adapters
 - browser automation
 - arbitrary code execution
 - full plugin marketplace
-- streamed responses
 
 ## Why this slice first
 

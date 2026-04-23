@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Slot, Signal
 class ListenerWorker(QObject):
     devices_ready = Signal(object)
     level_ready = Signal(float)
+    audio_captured = Signal(object)
     speech_started = Signal()
     utterance_ready = Signal(object)
     interrupt_requested = Signal()
@@ -162,6 +163,7 @@ class ListenerWorker(QObject):
             audio = np.squeeze(np.asarray(indata, dtype=np.float32).copy())
             if audio.ndim == 0:
                 audio = np.array([float(audio)], dtype=np.float32)
+            self.audio_captured.emit(audio)
 
             energy = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
             level = min(1.0, energy * 10.0)

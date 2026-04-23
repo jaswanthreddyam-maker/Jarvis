@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
-assistant/config/.env
-assistant/memory/*.db
+.env
+.env.development
+.env.production
 .venv/
 logs/
 .vscode/

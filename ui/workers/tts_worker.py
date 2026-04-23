@@ -30,7 +30,7 @@ class TTSWorker(QObject):
                 self.ready.emit({"status": status})
                 return
 
-            from assistant.voice.tts import TTS
+            from jarvis.voice.tts import TTS
 
             self._engine = TTS()
             self._engine.set_on_finished(self._on_finished)

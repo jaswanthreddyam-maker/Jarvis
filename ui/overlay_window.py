@@ -46,17 +46,17 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSizePolicy,
-    QVBoxLayout,
     QWidget,
 )
 from ui.input_handler import OverlayInputHandler, OverlaySessionState
-from ui.widgets.chat_input import OverlayChatPanel
-from ui.widgets.streaming_text import StreamingTextLabel
+from ui.widgets.chat_input import (
+    OverlayChatPanel,
+    OverlayConversationPanel,
+    status_palette,
+)
 
 
 OVERLAY_VERBOSE = bool(os.environ.get("JARVIS_DEBUG") or os.environ.get("JARVIS_VERBOSE_OVERLAY"))
@@ -234,6 +234,8 @@ class JarvisOverlay(QWidget):
         self._control_bar_visible = False
         self._chat_panel_visible = False
         self._esc_pressed_last = False
+        self._pending_response_text = ""
+        self._awaiting_response = False
         
         # Connect internal signals for cross-thread HUD control
         self._show_signal.connect(self.show_overlay, Qt.ConnectionType.QueuedConnection)
@@ -307,81 +309,33 @@ class JarvisOverlay(QWidget):
         self._chat_slide_anim.finished.connect(self._on_chat_transition_finished)
         self._input_handler = OverlayInputHandler(self)
         self._chat_panel.text_submitted.connect(self._on_chat_submitted)
+        self._chat_panel.voice_requested.connect(self.start_requested.emit)
         self._chat_panel.draft_changed.connect(self._input_handler.on_draft_changed)
         self._input_handler.state_changed.connect(self._on_input_state_changed)
         self._input_handler.submission_requested.connect(self.text_submitted)
-        self._chat_panel.history.setMinimumHeight(0)
-        self._chat_panel.history.setMaximumHeight(0)
-        self._chat_panel.history.hide()
         
-        # ---- right-side response panel ----------------------------------
-        self._response_panel = QWidget(self)
-        self._response_panel.setObjectName("overlayResponsePanel")
-        self._response_panel.setFixedWidth(320)
-        self._response_panel.setStyleSheet(
-            "#overlayResponsePanel {"
-            "  background: rgba(10, 10, 10, 0.72);"
-            "  border-left: 1px solid rgba(255, 255, 255, 0.08);"
-            "  border-radius: 0px;"
-            "}"
+        self._status_pill = QLabel(self)
+        self._status_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_pill.setStyleSheet(
+            "background: transparent;"
+            "color: rgba(255, 255, 255, 0.45);"
+            "font-size: 11px;"
+            "font-weight: 600;"
+            "letter-spacing: 1.4px;"
+            "text-transform: uppercase;"
         )
-        screen = QApplication.primaryScreen()
-        screen_rect = screen.availableGeometry() if screen else self.geometry()
-        self._response_panel.setGeometry(
-            max(0, screen_rect.width() - 320),
-            0,
-            320,
-            max(0, screen_rect.height()),
-        )
+        self._status_pill.hide()
+
+        # ---- right-side conversation panel ------------------------------
+        self._response_panel = OverlayConversationPanel(self)
         self._response_panel.hide()
-
-        panel_layout = QVBoxLayout(self._response_panel)
-        panel_layout.setContentsMargins(18, 40, 18, 24)
-        panel_layout.setSpacing(12)
-        panel_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._response_panel_layout = panel_layout
-
-        self._response_label = QLabel(self._response_panel)
-        self._response_label.setObjectName("overlayResponseLabel")
-        self._response_label.setWordWrap(True)
-        self._response_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self._response_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 0.92);"
-            "font-size: 14px;"
-            "background: transparent;"
-            "border: none;"
-            "padding: 0px;"
-        )
-        self._response_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._response_label.hide()
-        self._detach_from_center_stack(self._response_label)
-        panel_layout.addWidget(self._response_label)
-
-        self._streaming_widget = StreamingTextLabel(self._response_panel)
-        self._streaming_widget.setObjectName("overlayStreamingWidget")
-        self._streaming_widget.setWordWrap(True)
-        self._streaming_widget.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self._streaming_widget.setStyleSheet(
-            "color: rgba(180, 220, 200, 0.80);"
-            "font-size: 12px;"
-            "background: transparent;"
-            "border: none;"
-        )
-        self._streaming_widget.setFrameShape(QFrame.Shape.NoFrame)
-        self._streaming_widget.setFrameShadow(QFrame.Shadow.Plain)
-        self._streaming_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._streaming_widget.hide()
-        self._detach_from_center_stack(self._streaming_widget)
-        panel_layout.addWidget(self._streaming_widget)
-
-        self._response_panel_hide_timer = QTimer(self)
-        self._response_panel_hide_timer.setSingleShot(True)
-        self._response_panel_hide_timer.setInterval(6000)
-        self._response_panel_hide_timer.timeout.connect(self._maybe_hide_response_panel)
+        self._position_response_panel()
         self._set_response_panel_visible(False)
+        self._apply_status_visuals(self._status_text)
 
         # Ensure chat input stays in the center stack
         self._chat_panel.raise_()
+        self._status_pill.raise_()
 
         # ---- global hotkey ---------------------------------------------
         self._hotkey: Optional[_WinHotkey] = None
@@ -441,7 +395,7 @@ class JarvisOverlay(QWidget):
         self._control_slide_anim.finished.connect(self._on_control_transition_finished)
 
     def _position_controls(self):
-        """Place the control bar at bottom-center and chat panel below orb."""
+        """Place the control bar, status pill, center input, and right panel."""
         if self.width() <= 0 or self.height() <= 0:
             return
 
@@ -465,43 +419,72 @@ class JarvisOverlay(QWidget):
             self._chat_slide_anim.setEndValue(chat_target)
         else:
             self._chat_panel.move(chat_target)
+        self._position_status_pill()
         self._position_response_panel()
 
     def _position_response_panel(self) -> None:
         if not hasattr(self, "_response_panel") or self.width() <= 0 or self.height() <= 0:
             return
-        self._response_panel.setGeometry(max(0, self.width() - 320), 0, 320, self.height())
+        panel_width = self._response_panel.width()
+        margin = 28
+        panel_height = max(280, self.height() - margin * 2)
+        self._response_panel.setGeometry(
+            max(margin, self.width() - panel_width - margin),
+            margin,
+            panel_width,
+            panel_height,
+        )
 
-    def _detach_from_center_stack(self, widget: QWidget) -> None:
-        if widget.parentWidget() is self._response_panel:
+    def _position_status_pill(self) -> None:
+        if not hasattr(self, "_status_pill"):
             return
+        self._status_pill.adjustSize()
+        cx, cy = self._visual_center()
+        self._status_pill.move(
+            int(cx - self._status_pill.width() / 2),
+            int(cy + _ORB_BASE_RADIUS + 36),
+        )
 
-        root_layout = self.layout()
-        if root_layout is not None and root_layout.indexOf(widget) != -1:
-            root_layout.removeWidget(widget)
+    def _visual_center(self) -> tuple[float, float]:
+        reserved = 0
+        if hasattr(self, "_response_panel"):
+            reserved = self._response_panel.width() + 56
+        cx = max(220.0, (self.width() - reserved) / 2)
+        cy = max(180.0, (self.height() / 2) - 24)
+        return cx, cy
 
-        parent = widget.parentWidget()
-        if parent is not None and parent is not self._response_panel:
-            parent_layout = parent.layout()
-            if parent_layout is not None and parent_layout.indexOf(widget) != -1:
-                parent_layout.removeWidget(widget)
+    def _status_hint(self, status: str) -> str:
+        return status_palette(status).get("detail", "Awaiting the next request")
 
-        if parent is not self._response_panel:
-            widget.setParent(None)
+    def _apply_status_visuals(self, status: str) -> None:
+        meta = status_palette(status)
+        self._status_pill.setText(meta["label"].upper())
+        self._status_pill.setStyleSheet(
+            "background: transparent;"
+            f"color: {meta['text']};"
+            "font-size: 11px;"
+            "font-weight: 600;"
+            "letter-spacing: 1.4px;"
+        )
+        if hasattr(self, "_response_panel"):
+            self._response_panel.set_status(status, meta["detail"])
+        self._position_status_pill()
 
     def _control_bar_visible_pos(self) -> QPoint:
         bw = self._control_bar.width()
         bh = self._control_bar.height()
-        return QPoint((self.width() - bw) // 2, self.height() - bh - 60)
+        cx, _ = self._visual_center()
+        return QPoint(int(cx - (bw / 2)), self.height() - bh - 60)
 
     def _control_bar_hidden_pos(self) -> QPoint:
         pos = self._control_bar_visible_pos()
         return QPoint(pos.x(), pos.y() + _CONTROL_HIDE_OFFSET)
 
     def _chat_panel_visible_pos(self) -> QPoint:
-        orb_bottom = int(self.height() / 2) + _ORB_BASE_RADIUS + 65
+        cx, cy = self._visual_center()
+        orb_bottom = int(cy) + _ORB_BASE_RADIUS + 68
         pw = self._chat_panel.width()
-        return QPoint((self.width() - pw) // 2, orb_bottom)
+        return QPoint(int(cx - (pw / 2)), orb_bottom)
 
     def _chat_panel_hidden_pos(self) -> QPoint:
         pos = self._chat_panel_visible_pos()
@@ -571,7 +554,6 @@ class JarvisOverlay(QWidget):
         self._status_text = upper
         visual_busy_states = {"LISTENING", "RECOGNIZING", "THINKING", "PROCESSING", "EXECUTING", "RESPONDING", "SPEAKING"}
         input_busy_states = {"RECOGNIZING", "THINKING", "PROCESSING", "EXECUTING", "SPEAKING"}
-        streaming_states = {"RECOGNIZING", "THINKING", "PROCESSING", "EXECUTING", "RESPONDING", "SPEAKING"}
         interacting = self._active or upper in visual_busy_states
         if interacting != self._interaction_active:
             self._interaction_active = interacting
@@ -582,18 +564,36 @@ class JarvisOverlay(QWidget):
         if self._active:
             self._sync_control_bar()
         self._chat_panel.set_processing(upper in input_busy_states)
-        if hasattr(self, "_streaming_widget"):
-            if upper in streaming_states:
-                self._response_panel_hide_timer.stop()
-                self._streaming_widget.setText(upper)
-                self._streaming_widget.show()
-                self._set_response_panel_visible(True)
-            else:
-                self._streaming_widget.clear_stream()
-                if self._response_label.text().strip():
-                    self._set_response_panel_visible(True)
-                elif upper != "TYPING":
-                    self._set_response_panel_visible(False)
+        self._apply_status_visuals(upper)
+        if self._active and hasattr(self, "_response_panel"):
+            self._set_response_panel_visible(True)
+        if (
+            upper in {"RECOGNIZING", "THINKING", "PROCESSING", "EXECUTING"}
+            and self._awaiting_response
+            and not self._pending_response_text.strip()
+        ):
+            self._response_panel.set_pending_assistant_hint(self._status_hint(upper))
+        if upper == "INTERRUPTED" and self._awaiting_response:
+            fallback = self._pending_response_text.strip() or "Request interrupted."
+            self._response_panel.finalize_assistant_message(fallback)
+            self._pending_response_text = ""
+            self._awaiting_response = False
+            self._chat_panel.ready_for_next_turn()
+            self._input_handler.finish_cycle()
+        elif upper == "ERROR" and self._awaiting_response and self._pending_response_text.strip():
+            self._response_panel.finalize_assistant_message(self._pending_response_text.strip())
+            self._pending_response_text = ""
+            self._awaiting_response = False
+            self._chat_panel.ready_for_next_turn()
+            self._input_handler.finish_cycle()
+        elif upper in {"RESPONDING", "SPEAKING", "IDLE", "LISTENING"} and self._awaiting_response:
+            final_text = self._pending_response_text.strip()
+            if final_text:
+                self._response_panel.finalize_assistant_message(final_text)
+            self._pending_response_text = ""
+            self._awaiting_response = False
+            self._chat_panel.ready_for_next_turn()
+            self._input_handler.finish_cycle()
         if upper in {"IDLE", "TYPING", "LISTENING"} and self._active and not self._chat_panel.input_field.hasFocus():
             QTimer.singleShot(40, self._chat_panel.focus_input)
         self._queue_overlay_update()
@@ -681,7 +681,8 @@ class JarvisOverlay(QWidget):
 
         # Show chat panel and focus input
         self._animate_chat_panel(True)
-        self._set_response_panel_visible(False)
+        self._set_response_panel_visible(True)
+        self._status_pill.show()
         self._sync_control_bar()
         self._input_handler.activate()
         QTimer.singleShot(120, self._chat_panel.focus_input)
@@ -708,6 +709,7 @@ class JarvisOverlay(QWidget):
         self._input_handler.cancel()
         self._animate_chat_panel(False)
         self._set_response_panel_visible(False)
+        self._status_pill.hide()
         
         if self._idle_timer.isActive():
             self._idle_timer.stop()
@@ -860,6 +862,8 @@ class JarvisOverlay(QWidget):
             self.hide()
             self._control_bar.hide()
             self._chat_panel.hide()
+            self._status_pill.hide()
+            self._response_panel.hide()
             self._update_pending = False
             self._frame_dirty = False
         self._is_animating = False
@@ -894,8 +898,10 @@ class JarvisOverlay(QWidget):
     # ------------------------------------------------------------------
     def _on_chat_submitted(self, text: str):
         """Handle text submission from the chat input."""
-        self._chat_panel.add_user_message(text)
-        self._chat_panel.show_thinking()
+        self._response_panel.add_user_message(text)
+        self._response_panel.set_pending_assistant_hint(self._status_hint("THINKING"))
+        self._pending_response_text = ""
+        self._awaiting_response = True
         self._input_handler.submit(text)
         # Stop idle timer — we're actively processing
         if self._idle_timer.isActive():
@@ -918,53 +924,38 @@ class JarvisOverlay(QWidget):
                 Q_ARG(str, text),
             )
             return
-        self._chat_panel.add_assistant_message(text)
-        if hasattr(self, "_response_label"):
-            self._response_panel_hide_timer.stop()
-            self._response_label.setText(text)
-            self._response_label.setVisible(bool(text.strip()))
-            if hasattr(self, "_streaming_widget"):
-                self._streaming_widget.clear_stream()
-            self._set_response_panel_visible(True)
-        self._chat_panel.ready_for_next_turn()
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        self._pending_response_text = cleaned
+        self._awaiting_response = True
+        self._response_panel.update_assistant_message(cleaned)
+        self._set_response_panel_visible(True)
         self._input_handler.mark_responding()
-        QTimer.singleShot(420, self._input_handler.finish_cycle)
-        if self._active:
-            QTimer.singleShot(480, self._restore_ready_state)
         self._queue_overlay_update()
         self._sync_frame_loop(immediate=True)
 
     def _set_response_panel_visible(self, visible: bool) -> None:
-        if not hasattr(self, "_response_panel") or not hasattr(self, "_response_label"):
+        if not hasattr(self, "_response_panel"):
             return
         if visible:
-            self._response_panel_hide_timer.stop()
             self._position_response_panel()
             self._response_panel.show()
             self._response_panel.raise_()
             self._response_panel.update()
             return
-        self._response_panel_hide_timer.stop()
-        if hasattr(self, "_streaming_widget"):
-            self._streaming_widget.clear_stream()
         self._response_panel.hide()
 
     def _maybe_hide_response_panel(self) -> None:
-        self._response_panel_hide_timer.stop()
+        return
 
     def _schedule_response_panel_hide(self) -> None:
-        self._response_panel_hide_timer.stop()
-
-    def _restore_ready_state(self) -> None:
-        if not self._active or self._is_animating:
-            return
-        if self._status_text not in {"IDLE", "RESPONDING"}:
-            return
-        self.set_status("LISTENING")
+        return
 
     def show_chat_thinking(self):
         """Show the animated thinking indicator in chat."""
-        self._chat_panel.show_thinking()
+        self._response_panel.set_pending_assistant_hint(self._status_hint("THINKING"))
+        self._awaiting_response = True
         self._input_handler.mark_processing()
         self._queue_overlay_update()
         self._sync_frame_loop(immediate=True)
@@ -1013,22 +1004,29 @@ class JarvisOverlay(QWidget):
         # Color shift and BG intensity for states
         fade_speed = 4.5
         
-        if self._status_text in {"RECOGNIZING", "THINKING", "PROCESSING"}:
-            target_c = QColor(160, 100, 220)  # Purple
-            target_bg_tint = QColor(16, 10, 28)
+        if self._status_text in {"RECOGNIZING", "THINKING"}:
+            target_c = QColor(96, 165, 250)  # Blue
+            target_bg_tint = QColor(10, 18, 34)
             pulse_speed = 1.0
             pulse_amp = 0.0 if self._low_perf else 0.02
             target_bg = 0.45 + math.sin(self._time * 1.2) * pulse_amp
             fade_speed = 1.5
+        elif self._status_text in {"PROCESSING", "EXECUTING", "RESPONDING"}:
+            target_c = QColor(167, 139, 250)  # Purple
+            target_bg_tint = QColor(18, 12, 32)
+            pulse_speed = 1.35
+            pulse_amp = 0.0 if self._low_perf else 0.018
+            target_bg = 0.42 + math.sin(self._time * 1.0) * pulse_amp
+            fade_speed = 2.2
         elif self._status_text == "LISTENING":
-            target_c = QColor(184, 155, 92)  # Gold
-            target_bg_tint = QColor(6, 12, 22)
+            target_c = QColor(74, 222, 128)  # Green
+            target_bg_tint = QColor(6, 18, 16)
             pulse_speed = 2.0
             target_bg = 0.40
             fade_speed = 7.5
-        elif self._status_text in {"EXECUTING", "RESPONDING", "SPEAKING"}:
-            target_c = QColor(80, 200, 180)  # Cyan
-            target_bg_tint = QColor(4, 16, 20)
+        elif self._status_text == "SPEAKING":
+            target_c = QColor(184, 150, 12)  # Amber
+            target_bg_tint = QColor(20, 14, 8)
             pulse_speed = 1.8
             target_bg = 0.35
             fade_speed = 4.5
@@ -1281,7 +1279,7 @@ class JarvisOverlay(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
             w, h = self.width(), self.height()
-            cx, cy = w / 2, h / 2
+            cx, cy = self._visual_center()
 
             self._paint_bg(painter, w, h, cx, cy)
             self._paint_ambient_waves(painter, cx, cy)
@@ -1290,8 +1288,7 @@ class JarvisOverlay(QWidget):
             if not self._low_perf:
                 self._paint_particles(painter, cx, cy)
             self._paint_orb(painter, cx, cy)
-            # self._paint_status(painter, cx, cy)  # Replaced by _response_label widget
-            self._paint_hint(painter, w, h)
+            self._paint_overlay_hint(painter, w, h)
         finally:
             if painter.isActive():
                 painter.end()
@@ -1496,8 +1493,18 @@ class JarvisOverlay(QWidget):
         p.setPen(QColor(self._current_color.red(), self._current_color.green(), self._current_color.blue(), 170))
         p.drawText(QRectF(cx - 220, y, 440, 28), Qt.AlignmentFlag.AlignCenter, self._status_text)
 
+    def _paint_overlay_hint(self, p: QPainter, w, h):
+        p.setFont(QFont("Segoe UI", 10))
+        p.setPen(QColor(130, 140, 150, 120))
+        cx, _ = self._visual_center()
+        p.drawText(
+            QRectF(cx - 220, h - 50, 440, 24),
+            Qt.AlignmentFlag.AlignCenter,
+            "Enter to send  |  ESC to dismiss",
+        )
+
     # --- bottom hint ----------------------------------------------------
-    def _paint_hint(self, p: QPainter, w, h):
+    def _paint_hint_legacy(self, p: QPainter, w, h):
         p.setFont(QFont("Segoe UI", 10))
         p.setPen(QColor(130, 140, 150, 120))
         p.drawText(

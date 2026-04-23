@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from assistant.tools import file_ops
+from jarvis.infrastructure.system_control import file_ops
 
 
 class FileOpsTests(unittest.TestCase):

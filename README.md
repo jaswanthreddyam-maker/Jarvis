@@ -1,57 +1,33 @@
 # Jarvis
 
-This repo bootstraps the first working slice of the architecture described in the supplied PDFs. The current milestone is a text-first control plane: it plans a request, validates action permissions, executes them through an orchestrator, tracks task state, stores memory in SQLite, and exposes a simple CLI.
-
-Voice I/O, real Claude/Codex calls, streaming, and full OS/browser automation are intentionally stubbed for the next phase. The goal of this slice is to make the execution backbone real before we attach wake-word, STT, TTS, and cloud/local model integrations.
-
-## What works now
-
-- Central orchestrator with task-state tracking
-- Retry/policy handling and safe action allowlist
-- SQLite-backed long-term memory plus in-session context
-- Event bus plus reminder scheduling
-- Text CLI for one-shot commands or interactive use
-- Real execution for safe URL, web search, and app launch actions
+Jarvis is now structured as a deployable AI assistant runtime with centralized configuration, structured logging, health monitoring, bounded concurrency, retry/backoff, a standalone backend API, and a separate desktop client.
 
 ## Quick start
 
-```powershell
-python -m assistant.main "open youtube" --json
-python -m assistant.main "remember that I like dark mode"
-python -m assistant.main "what do you remember about dark mode"
-python -m assistant.main
-```
+1. Install the pinned dependencies from `requirements.txt`.
+2. Copy `.env.example` to `.env` and fill in the provider keys or local model settings you want.
+3. Start the backend service with `python -m jarvis.api`.
+4. Start the desktop client in a separate process with `python ui/app.py`.
+
+The desktop client communicates with the backend over the network only. Real-time runtime updates stream over `ws://127.0.0.1:8000/ws`; REST remains available for simple health and execution endpoints.
+
+## Operations
+
+- Structured logs: `logs/jarvis.log`
+- Error log: `logs/jarvis.error.log`
+- Audit trail: `logs/safety_audit.jsonl`
+- Health endpoint: `GET /health`
+- Readiness endpoint: `GET /ready`
+- Streaming endpoint: `WS /ws`
+
+## Documentation
+
+- [Setup Guide](docs/setup.md)
+- [Architecture Overview](docs/architecture.md)
+- [Deployment Strategy](docs/deployment.md)
 
 ## Test
 
 ```powershell
 python -m unittest discover -s tests
 ```
-
-## Current examples
-
-- `open youtube`
-- `search for local llm setup`
-- `what time is it`
-- `remember that my favorite editor is vscode`
-- `what do you remember about editor`
-- `remind me to stretch in 0 seconds`
-- `health`
-
-## Layout
-
-- `assistant/`: runtime package
-- `assistant/config/`: model/runtime config and env template
-- `assistant/prompts/`: prompt contracts for future LLM integrations
-- `assistant/schemas/`: JSON schemas for intent, plans, and tool calls
-- `docs/source/`: extracted text from the two architecture PDFs
-- `docs/implementation-plan.md`: implementation interpretation and MVP scope
-
-## Safety defaults
-
-The scaffold runs in safe mode by default:
-
-- safe actions like `open_url`, `open_app`, and `search_web` still execute
-- restricted actions remain blocked or require confirmation by policy
-- dry-run behavior only happens when a request explicitly asks for simulation
-- no external API calls are required for the current milestone

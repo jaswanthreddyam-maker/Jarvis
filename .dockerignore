@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.zip
+.vscode
+logs
+scratch
+output.wav
+assistant/memory/*.db
