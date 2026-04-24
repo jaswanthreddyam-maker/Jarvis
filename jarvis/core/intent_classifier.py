@@ -48,6 +48,7 @@ class FastResult:
     description: str = ""
     elapsed_ms: float = 0.0
     confidence: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 _NO_MATCH = FastResult(matched=False)
@@ -184,6 +185,8 @@ class FastRule:
 def _h_open_url(text: str, *, site: str, rest: str = "") -> FastResult:
     """open <site>  /  open <site> in <browser>"""
     conf = 1.0
+    is_external = False
+    
     if rest:
         browser = _extract_browser(rest)
         if browser is None:
@@ -197,13 +200,26 @@ def _h_open_url(text: str, *, site: str, rest: str = "") -> FastResult:
         cleaned = _norm(site)
         if "." in cleaned and " " not in cleaned:
             url = f"https://{cleaned}"
+            is_external = True
+            conf = 0.9  # Bare domain is slightly less confident than a known alias
         else:
             return _NO_MATCH
+    
     args: dict = {"url": url}
     if browser:
         args["browser_app"] = browser
+        
     desc = f"Open {url}" + (f" in {browser}" if browser else "") + "."
-    return FastResult(matched=True, tool="open_url", args=args, description=desc, confidence=conf)
+    metadata = {"is_external": is_external}
+    
+    return FastResult(
+        matched=True, 
+        tool="open_url", 
+        args=args, 
+        description=desc, 
+        confidence=conf, 
+        metadata=metadata
+    )
 
 
 def _h_search_on_site(text: str, *, query: str, site: str) -> FastResult:

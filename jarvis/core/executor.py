@@ -300,6 +300,22 @@ class ToolExecutor:
             self._publish_execution_update(request_id, step, result)
             return result
 
+        # Intent Contradiction Guard: Add a micro-delay for dangerous actions
+        # to allow for immediate human correction/cancellation.
+        if permission_level == PermissionLevel.DANGEROUS:
+            await asyncio.sleep(0.15)
+            if token is not None and token.is_cancelled():
+                 return StepExecutionResult(
+                    step_id=step.step_id,
+                    action=step.action,
+                    target=step.target,
+                    params=dict(sandbox.sanitized_params),
+                    success=False,
+                    message="Cancelled during human correction window.",
+                    error="cancelled",
+                    status="cancelled",
+                )
+
         sandbox = self._sandbox.evaluate(
             action_name=step.action,
             params=validation.sanitized_params,

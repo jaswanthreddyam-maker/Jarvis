@@ -79,23 +79,18 @@ class DecisionEngine:
         if not getattr(normalized_result, "metadata", {}).get("unsafe_normalization"):
             fast = self._intent_classifier.classify(normalized_text)
             if fast.matched:
-                # Execution Safety: Require confirmation for destructive fast-path actions
-                perm = "CONFIRM" if fast.tool in {"delete_folder", "close_app"} else "SAFE"
+                policy = self._apply_policy(fast)
                 
-                # Synthesise an ActionPolicy so we can cache it
-                policy = ActionPolicy(
-                    intent=fast.tool,
-                    tool=fast.tool,
-                    args=fast.args,
-                    confidence=getattr(fast, "confidence", 1.0),
-                    permission_level=perm,
-                )
-                self._cache.set(normalized_text, policy)
-                logger.info(
-                    "Tier-0 fast match: tool=%s args=%s (%.2f ms)",
-                    fast.tool, fast.args, fast.elapsed_ms,
-                )
-                return self._to_decision("execute_fast", policy, command, normalized_text)
+                # Confidence Floor: if Tier 0 is unsure, let the LLM take a look
+                if policy.confidence < 0.9:
+                    logger.info("Tier 0 confidence low (%.2f) — downgrading to Tier 1.", policy.confidence)
+                else:
+                    self._cache.set(normalized_text, policy)
+                    logger.info(
+                        "Tier-0 fast match: tool=%s args=%s (%.2f ms)",
+                        fast.tool, fast.args, fast.elapsed_ms,
+                    )
+                    return self._to_decision("execute_fast", policy, command, normalized_text)
         else:
             logger.info("Skipping Tier 0 due to unsafe normalization (fuzzy matching used).")
 
@@ -159,4 +154,31 @@ class DecisionEngine:
             args=policy.args,
             permission_level=policy.permission_level,
             confidence=policy.confidence,
+        )
+
+    def _apply_policy(self, fast: FastResult) -> ActionPolicy:
+        """Risk analysis and policy arbitration for fast-path intents."""
+        perm = "safe"
+        conf = fast.confidence
+        
+        # 1. Tool-level risk escalation
+        if fast.tool in {"delete_folder", "remove_folder", "delete_file"}:
+            perm = "dangerous"
+        elif fast.tool in {"close_app", "system_action"}:
+            perm = "moderate"
+            
+        # 2. Content-level risk escalation (e.g. external URLs)
+        if fast.metadata.get("is_external"):
+            # External URL navigation is promoted to MODERATE to prevent blind phishing
+            perm = "moderate"
+            
+        # 3. Behavioral Overrides (Confirmation Fatigue Protection)
+        # TODO: Check usage history here to auto-allow repeated safe actions
+        
+        return ActionPolicy(
+            intent=fast.tool,
+            tool=fast.tool,
+            args=fast.args,
+            confidence=conf,
+            permission_level=perm,
         )
