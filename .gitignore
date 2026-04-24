@@ -10,3 +10,7 @@ logs/
 output.wav
 .tmp/
 scratch/
+data/
+*.sqlite3
+*.npy
+tmp_*.py

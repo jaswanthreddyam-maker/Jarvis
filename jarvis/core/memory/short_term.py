@@ -57,6 +57,12 @@ class ShortTermMemory:
             items = items[-limit:]
         return [item.as_dict() for item in items]
 
+    def last_interaction(self) -> dict[str, Any] | None:
+        with self._lock:
+            if not self._items:
+                return None
+            return self._items[-1].as_dict()
+
     def clear(self) -> None:
         with self._lock:
             self._items.clear()

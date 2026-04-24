@@ -94,52 +94,97 @@ class ToolExecutor:
         runtime_state: Any | None = None,
     ) -> ExecutionReport:
         mode = (concurrency_mode or self._default_mode).strip().lower()
-        pending = {step.step_id: step for step in plan.steps}
-        results: dict[int, StepExecutionResult] = {}
-        ordered_results: list[StepExecutionResult] = []
+        max_reflection_cycles = 2
+        reflection_cycle = 0
 
-        while pending:
-            ready: list[ExecutionStep] = []
-            for step_id in sorted(pending):
-                step = pending[step_id]
-                if not all(dep in results for dep in step.depends_on):
-                    continue
-                failed_dependencies = [dep for dep in step.depends_on if not results[dep].success]
-                if failed_dependencies:
-                    skipped = StepExecutionResult(
-                        step_id=step.step_id,
-                        action=step.action,
-                        target=step.target,
-                        params=dict(step.params),
-                        success=False,
-                        message="Skipped because a prerequisite step failed.",
-                        error="dependency_failed",
-                        data={"depends_on": list(step.depends_on)},
-                        status="skipped",
+        while reflection_cycle <= max_reflection_cycles:
+            pending = {step.step_id: step for step in plan.steps}
+            results: dict[int, StepExecutionResult] = {}
+            ordered_results: list[StepExecutionResult] = []
+
+            while pending:
+                ready: list[ExecutionStep] = []
+                for step_id in sorted(pending):
+                    step = pending[step_id]
+                    if not all(dep in results for dep in step.depends_on):
+                        continue
+                    failed_dependencies = [dep for dep in step.depends_on if not results[dep].success]
+                    if failed_dependencies:
+                        skipped = StepExecutionResult(
+                            step_id=step.step_id,
+                            action=step.action,
+                            target=step.target,
+                            params=dict(step.params),
+                            success=False,
+                            message="Skipped because a prerequisite step failed.",
+                            error="dependency_failed",
+                            data={"depends_on": list(step.depends_on)},
+                            status="skipped",
+                        )
+                        results[step.step_id] = skipped
+                        ordered_results.append(skipped)
+                        pending.pop(step.step_id, None)
+                        continue
+                    ready.append(step)
+
+                if not ready:
+                    break
+
+                if mode == "auto" and len(ready) > 1:
+                    batch = await asyncio.gather(
+                        *(self._execute_step(step, request_id=request_id, goal=goal, results=results, runtime_state=runtime_state) for step in ready)
                     )
-                    results[step.step_id] = skipped
-                    ordered_results.append(skipped)
-                    pending.pop(step.step_id, None)
-                    continue
-                ready.append(step)
+                else:
+                    batch = []
+                    for step in ready:
+                        batch.append(await self._execute_step(step, request_id=request_id, goal=goal, results=results, runtime_state=runtime_state))
 
-            if not ready:
-                break
+                for result in batch:
+                    results[result.step_id] = result
+                    ordered_results.append(result)
+                    pending.pop(result.step_id, None)
 
-            if mode == "auto" and len(ready) > 1:
-                batch = await asyncio.gather(
-                    *(self._execute_step(step, request_id=request_id, goal=goal, results=results, runtime_state=runtime_state) for step in ready)
-                )
-            else:
-                batch = []
-                for step in ready:
-                    batch.append(await self._execute_step(step, request_id=request_id, goal=goal, results=results, runtime_state=runtime_state))
+            success = all(item.success for item in ordered_results) if ordered_results else False
+            if success or reflection_cycle >= max_reflection_cycles or runtime_state is None or not hasattr(runtime_state, "_planner"):
+                response = self._compose_response(ordered_results, success=success, fallback=plan.fallback_response)
+                return ExecutionReport(success=success, response=response, steps=ordered_results)
 
-            for result in batch:
-                results[result.step_id] = result
-                ordered_results.append(result)
-                pending.pop(result.step_id, None)
+            reflection_cycle += 1
+            failed_step = next((r for r in ordered_results if not r.success), None)
+            if not failed_step:
+                response = self._compose_response(ordered_results, success=success, fallback=plan.fallback_response)
+                return ExecutionReport(success=success, response=response, steps=ordered_results)
+                
+            from jarvis.core.context import ExecutionPlan as ContextExecutionPlan
+            plan_payload = {"intent": plan.intent, "goal": plan.goal, "steps": [
+                {"tool": s.action, "target": s.target, "args": s.params, "description": s.description} for s in plan.steps
+            ]}
+            reflection = runtime_state._planner.reflect(
+                goal=goal,
+                current_plan=plan_payload,
+                failed_step={"action": failed_step.action, "error": failed_step.error, "message": failed_step.message},
+                execution_result={"status": "failed"}
+            )
+            if reflection.decision in ("abort", "ask_user"):
+                response = reflection.message or reflection.question or "Task failed and I cannot safely recover."
+                return ExecutionReport(success=False, response=response, steps=ordered_results)
+                
+            from jarvis.core.context import ExecutionStep as ContextExecutionStep
+            plan.steps = [
+                ContextExecutionStep(
+                    step_id=i,
+                    action=d.action,
+                    target=d.target,
+                    params=d.params,
+                    depends_on=tuple(d.depends_on),
+                    condition=d.condition,
+                    param_bindings=d.param_bindings,
+                    description=d.description,
+                    confidence=d.confidence
+                ) for i, d in enumerate(reflection.directives, start=1)
+            ]
 
+        # fallback return
         success = all(item.success for item in ordered_results) if ordered_results else False
         response = self._compose_response(ordered_results, success=success, fallback=plan.fallback_response)
         return ExecutionReport(success=success, response=response, steps=ordered_results)

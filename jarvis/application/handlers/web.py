@@ -20,7 +20,11 @@ def get_time(params: dict[str, object], context) -> ToolResult:
 
 
 def open_url(params: dict[str, object], context) -> ToolResult:
-    url = str(params["url"]).strip()
+    url = str(params.get("url") or params.get("query", "")).strip()
+    if not url:
+        return ToolResult(success=False, message="No URL provided", error="missing_parameter")
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
     browser_app = str(params.get("browser_app", "")).strip()
     raise_if_cancelled(context, f"Cancelled opening {url}.")
     if should_simulate(params, context):

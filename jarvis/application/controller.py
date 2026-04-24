@@ -53,7 +53,7 @@ class JarvisApplication:
 
     def handle_text(
         self,
-        user_input: str,
+        user_input: Any,
         request_id: int | str | None = None,
     ) -> tuple[str, dict[str, object] | None]:
         try:
@@ -67,7 +67,7 @@ class JarvisApplication:
 
     async def handle_text_async(
         self,
-        user_input: str,
+        user_input: Any,
         request_id: int | str | None = None,
     ) -> tuple[str, dict[str, object] | None]:
         return await self.orchestrator.handle_text_async(user_input, request_id=request_id)

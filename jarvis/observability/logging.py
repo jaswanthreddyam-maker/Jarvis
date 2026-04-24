@@ -51,6 +51,7 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(settings: Settings, *, log_dir_override: Path | None = None) -> None:
+    Path("logs").mkdir(exist_ok=True)
     log_directory = (log_dir_override or settings.logging.directory).resolve()
     log_directory.mkdir(parents=True, exist_ok=True)
 
@@ -73,25 +74,31 @@ def configure_logging(settings: Settings, *, log_dir_override: Path | None = Non
         "%Y-%m-%d %H:%M:%S",
     )
 
-    app_handler = RotatingFileHandler(
-        application_log,
-        maxBytes=settings.logging.max_bytes,
-        backupCount=settings.logging.backup_count,
-        encoding="utf-8",
-    )
-    app_handler.setLevel(logging.DEBUG)
-    app_handler.setFormatter(json_formatter)
-    root_logger.addHandler(app_handler)
+    try:
+        app_handler = RotatingFileHandler(
+            application_log,
+            maxBytes=settings.logging.max_bytes,
+            backupCount=settings.logging.backup_count,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        app_handler.setLevel(logging.DEBUG)
+        app_handler.setFormatter(console_formatter)
+        root_logger.addHandler(app_handler)
 
-    error_handler = RotatingFileHandler(
-        error_log,
-        maxBytes=settings.logging.max_bytes,
-        backupCount=settings.logging.backup_count,
-        encoding="utf-8",
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(json_formatter)
-    root_logger.addHandler(error_handler)
+        error_handler = RotatingFileHandler(
+            error_log,
+            maxBytes=settings.logging.max_bytes,
+            backupCount=settings.logging.backup_count,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(console_formatter)
+        root_logger.addHandler(error_handler)
+    except Exception as e:
+        # Fallback if file logging fails
+        print(f"Failed to setup file loggers: {e}")
 
     if settings.logging.console_enabled:
         console_handler = logging.StreamHandler()
@@ -104,6 +111,7 @@ def configure_logging(settings: Settings, *, log_dir_override: Path | None = Non
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("comtypes").setLevel(logging.WARNING)
 
     logging.getLogger("Jarvis.Logging").info(
         "Structured logging configured.",

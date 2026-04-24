@@ -32,12 +32,14 @@ class Planner:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> PlanPreview:
         decision = self._brain.understand(
             text,
             memory=memory,
             conversation=conversation,
             system_state=system_state,
+            tier_hint=tier_hint,
         )
         directives = [directive for directive in decision.directives if directive.action in self._tool_names]
         return PlanPreview(
@@ -56,6 +58,7 @@ class Planner:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> PlanPreview:
         return await asyncio.to_thread(
             self.parse,
@@ -63,6 +66,7 @@ class Planner:
             memory=memory,
             conversation=conversation,
             system_state=system_state,
+            tier_hint=tier_hint,
         )
 
     def build_plan(
@@ -72,8 +76,9 @@ class Planner:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
-        preview = self.parse(goal, memory=memory, conversation=conversation, system_state=system_state)
+        preview = self.parse(goal, memory=memory, conversation=conversation, system_state=system_state, tier_hint=tier_hint)
         if preview.clarification_question:
             return ExecutionPlan(
                 intent="planner_message",
@@ -94,16 +99,14 @@ class Planner:
 
         normalized_steps: list[ExecutionStep] = []
         for index, directive in enumerate(preview.directives, start=1):
-            depends_on = tuple()
-            if directive.depends_on_previous and normalized_steps:
-                depends_on = (normalized_steps[-1].step_id,)
             normalized_steps.append(
                 ExecutionStep(
                     action=directive.action,
                     step_id=index,
                     target=directive.target,
                     params=dict(directive.params),
-                    depends_on=depends_on,
+                    depends_on=tuple(directive.depends_on),
+                    condition=directive.condition,
                     param_bindings=dict(directive.param_bindings),
                     description=directive.description,
                     confidence=directive.confidence,
@@ -126,13 +129,26 @@ class Planner:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
+        if hasattr(self._brain, "_llm_is_reachable"):
+            reachable = await self._brain._llm_is_reachable()
+            if not reachable:
+                return ExecutionPlan(
+                    intent="error",
+                    goal=goal,
+                    fallback_response="I can't reach my reasoning engine right now. Please check that your LLM model is running.",
+                    clarification_question="I can't reach my reasoning engine right now. Please check that your LLM model is running.",
+                    confidence=0.0
+                )
+
         return await asyncio.to_thread(
             self.build_plan,
             goal,
             memory=memory,
             conversation=conversation,
             system_state=system_state,
+            tier_hint=tier_hint,
         )
 
     def reflect(

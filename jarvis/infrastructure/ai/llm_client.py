@@ -57,6 +57,7 @@ class LLMClient:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         stage_result = self._query_stage(
             stage_name="intent_extraction",
@@ -68,6 +69,7 @@ class LLMClient:
                 memory=memory,
                 conversation=conversation,
                 system_state=system_state,
+                tier_hint=tier_hint,
             ),
         )
         if stage_result.payload is None:
@@ -121,6 +123,7 @@ class LLMClient:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         stage_result = self._query_stage(
             stage_name="task_planning",
@@ -132,6 +135,7 @@ class LLMClient:
                 memory=memory,
                 conversation=conversation,
                 system_state=system_state,
+                tier_hint=tier_hint,
                 intent_payload=intent_payload,
             ),
         )
@@ -187,6 +191,7 @@ class LLMClient:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         stage_result = self._query_stage(
             stage_name="execution_reflection",
@@ -198,6 +203,7 @@ class LLMClient:
                 memory=memory,
                 conversation=conversation,
                 system_state=system_state,
+                tier_hint=tier_hint,
                 current_plan=current_plan,
                 failed_step=failed_step,
                 execution_result=execution_result,
@@ -242,6 +248,8 @@ class LLMClient:
         tool_catalog: tuple[ToolDefinition, ...],
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
+        system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         intent_payload = self.extract_intent(
             user_text=user_text,
@@ -249,6 +257,8 @@ class LLMClient:
             tool_catalog=tool_catalog,
             memory=memory,
             conversation=conversation,
+            system_state=system_state,
+            tier_hint=tier_hint,
         )
         if intent_payload.get("clarification_question") or intent_payload.get("intent") == "unknown":
             return {
@@ -262,6 +272,8 @@ class LLMClient:
             intent_payload=intent_payload,
             memory=memory,
             conversation=conversation,
+            system_state=system_state,
+            tier_hint=tier_hint,
         )
 
     def _query_stage(
@@ -334,6 +346,7 @@ class LLMClient:
                 "raw_output": response.text,
             },
         )
+        logger.debug(f"[Brain] Raw LLM output: {response.text}")
         try:
             result.payload = self._extract_json_payload(response.text)
             return result
@@ -360,6 +373,7 @@ class LLMClient:
         memory: Any | None,
         conversation: list[dict[str, str]] | None,
         system_state: dict[str, Any] | None,
+        tier_hint: dict[str, Any] | None = None,
         intent_payload: dict[str, Any] | None = None,
         current_plan: dict[str, Any] | None = None,
         failed_step: dict[str, Any] | None = None,
@@ -405,6 +419,7 @@ class LLMClient:
             },
             "conversation_context": list(conversation or [])[-6:],
             "system_state": dict(system_state or {}),
+            "tier_hint": dict(tier_hint or {}),
         }
         if intent_payload is not None:
             payload["intent_summary"] = dict(intent_payload)

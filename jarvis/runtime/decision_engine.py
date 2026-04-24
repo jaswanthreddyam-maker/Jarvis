@@ -1,8 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
+from typing import Any
 
+from jarvis.core.intent_classifier import IntentClassifier
 from jarvis.runtime.input_handler import RuntimeInput
+from jarvis.runtime.normalizer import InputNormalizer
+from jarvis.core.safety.prescreen import SafetyPreScreen
+from jarvis.runtime.intent_cache import IntentCache
+from jarvis.runtime.rule_engine import RuleEngine, ActionPolicy
+from jarvis.runtime.embedding_matcher import EmbeddingMatcher
+from jarvis.core.memory.enricher import ContextEnricher
+
+logger = logging.getLogger("Jarvis.DecisionEngine")
 
 
 @dataclass(slots=True)
@@ -11,16 +22,122 @@ class RuntimeDecision:
     text: str = ""
     source: str = "text"
     interrupted: bool = False
+    intent: str | None = None
+    tool: str | None = None
+    args: dict[str, Any] = field(default_factory=dict)
+    tier_hint: dict[str, Any] | None = None
 
 
 class DecisionEngine:
+    def __init__(
+        self,
+        *,
+        normalizer: InputNormalizer,
+        prescreen: SafetyPreScreen,
+        cache: IntentCache,
+        rule_engine: RuleEngine,
+        embedding_matcher: EmbeddingMatcher,
+        enricher: ContextEnricher,
+        intent_classifier: IntentClassifier | None = None,
+    ) -> None:
+        self._normalizer = normalizer
+        self._prescreen = prescreen
+        self._cache = cache
+        self._rule_engine = rule_engine
+        self._embedding_matcher = embedding_matcher
+        self._enricher = enricher
+        self._intent_classifier = intent_classifier or IntentClassifier()
+
     def decide(self, command: RuntimeInput) -> RuntimeDecision:
-        cleaned = command.text.strip()
-        if not cleaned:
+        # Layer 0: PreScreen
+        raw_text = command.text.strip()
+        is_safe, reason = self._prescreen.check(raw_text)
+        if not is_safe:
+            return RuntimeDecision(
+                kind="ignore",
+                text=raw_text,
+                source=command.source,
+                interrupted=command.interrupted,
+                args={"reason": reason}
+            )
+
+        # Layer 0: Normalize
+        normalized_text = self._normalizer.normalize(raw_text)
+        if not normalized_text:
             return RuntimeDecision(kind="ignore")
+
+        # Layer 0: Intent Cache Check
+        cached_policy = self._cache.get(normalized_text)
+        if cached_policy is not None:
+            return self._to_decision("execute_fast", cached_policy, command, normalized_text)
+
+        # ── Tier 0: IntentClassifier (regex fast-path, <10ms) ─────────
+        fast = self._intent_classifier.classify(normalized_text)
+        if fast.matched:
+            # Synthesise an ActionPolicy so we can cache it
+            policy = ActionPolicy(
+                intent=fast.tool,
+                tool=fast.tool,
+                args=fast.args,
+                confidence=1.0,
+                permission_level="SAFE",
+            )
+            self._cache.set(normalized_text, policy)
+            logger.info(
+                "Tier-0 fast match: tool=%s args=%s (%.2f ms)",
+                fast.tool, fast.args, fast.elapsed_ms,
+            )
+            return self._to_decision("execute_fast", policy, command, normalized_text)
+
+        tier_hint: dict[str, Any] = {"tier0_attempted": True, "tier0_confidence": "no_match"}
+
+        # Tier 1: RuleEngine (YAML Regex/Trie)
+        rule_policy = self._rule_engine.process(normalized_text)
+        if rule_policy is not None:
+            self._cache.set(normalized_text, rule_policy)
+            return self._to_decision("execute_fast", rule_policy, command, normalized_text)
+        else:
+            tier_hint["tier1_attempted"] = True
+            tier_hint["tier1_confidence"] = "failed"
+
+        # Tier 2: EmbeddingMatcher (Semantic similarity)
+        embed_policy = self._embedding_matcher.process(normalized_text)
+        if embed_policy is not None:
+            self._cache.set(normalized_text, embed_policy)
+            return self._to_decision("execute_fast", embed_policy, command, normalized_text)
+        else:
+            tier_hint["tier2_attempted"] = True
+            tier_hint["tier2_confidence"] = "failed"
+
+        # Tier 3: Escalate to LLM Brain
+        logger.info("All fast tiers missed — escalating to LLM: %r", normalized_text)
         return RuntimeDecision(
             kind="execute",
-            text=cleaned,
+            text=normalized_text,
             source=command.source,
             interrupted=command.interrupted,
+            tier_hint=tier_hint
+        )
+
+    def cache_intent(self, text: str, intent: str, tool: str, args: dict[str, Any]) -> None:
+        """Called by the orchestrator after a successful LLM plan resolution."""
+        normalized = self._normalizer.normalize(text)
+        policy = ActionPolicy(
+            intent=intent,
+            tool=tool,
+            args=args,
+            confidence=1.0,
+            permission_level="SAFE"
+        )
+        self._cache.set(normalized, policy)
+
+    def _to_decision(self, kind: str, policy: ActionPolicy, command: RuntimeInput, text: str) -> RuntimeDecision:
+        return RuntimeDecision(
+            kind=kind,
+            text=text,
+            source=command.source,
+            interrupted=command.interrupted,
+            intent=policy.intent,
+            tool=policy.tool,
+            args=policy.args
         )

@@ -12,12 +12,22 @@ from jarvis.runtime.utils import configure_espeak
 
 
 def _parse_options() -> RuntimeOptions:
-    parser = argparse.ArgumentParser(description="Jarvis Local AI Assistant")
+    parser = argparse.ArgumentParser(description="Jarvis AI Companion")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--voice", action="store_true", help="Enable voice input via ASR")
+    parser.add_argument("--voice", action="store_true", help="Enable companion voice mode")
+    parser.add_argument("--companion", action="store_true", help="Enable companion voice mode (alias for --voice)")
+    parser.add_argument("--gateway", action="store_true", help="Start WebSocket voice gateway")
+    parser.add_argument("--gateway-port", type=int, default=8766, help="Voice gateway port (default: 8766)")
     parser.add_argument("--test-mode", action="store_true", help="Run a demo command")
     args = parser.parse_args()
-    return RuntimeOptions(debug=args.debug, voice=args.voice, test_mode=args.test_mode)
+    return RuntimeOptions(
+        debug=args.debug,
+        voice=args.voice or args.companion,
+        test_mode=args.test_mode,
+        companion_mode=args.voice or args.companion,
+        gateway_mode=args.gateway,
+        gateway_port=args.gateway_port,
+    )
 
 
 async def main() -> None:

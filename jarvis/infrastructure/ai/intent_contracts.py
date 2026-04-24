@@ -12,7 +12,7 @@ class IntentContractError(ValueError):
 
 
 class IntentSummaryPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     intent: str
     tool: str = ""
@@ -25,19 +25,20 @@ class IntentSummaryPayload(BaseModel):
 
 
 class IntentStepPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
     target: str = ""
     description: str = ""
     confidence: float = 0.0
-    depends_on_previous: bool = False
+    depends_on: list[int] = Field(default_factory=list)
+    condition: str | None = None
     param_bindings: dict[str, str] = Field(default_factory=dict)
 
 
 class PlanningPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     intent: str
     tool: str = ""
@@ -51,7 +52,7 @@ class PlanningPayload(BaseModel):
 
 
 class ReflectionPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     decision: str
     confidence: float = 0.0
@@ -352,7 +353,9 @@ def _validate_steps(
                 "args": args,
                 "description": description,
                 "confidence": max(0.0, min(1.0, float(step.confidence or fallback_confidence or 0.8))),
-                "depends_on_previous": bool(step.depends_on_previous),
+                "depends_on": list(step.depends_on),
+                "condition": step.condition,
+                "permission_level": getattr(tool_definition, "risk", "safe"),
                 "param_bindings": {
                     _normalize_identifier(name): _clean_text(binding)
                     for name, binding in step.param_bindings.items()

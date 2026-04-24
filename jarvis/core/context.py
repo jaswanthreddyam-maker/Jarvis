@@ -38,7 +38,8 @@ class ActionDirective:
     params: dict[str, Any] = field(default_factory=dict)
     description: str = ""
     confidence: float = 0.0
-    depends_on_previous: bool = False
+    depends_on: list[int] = field(default_factory=list)
+    condition: str | None = None
     param_bindings: dict[str, str] = field(default_factory=dict)
     source: str = "brain"
 
@@ -99,6 +100,7 @@ class ExecutionStep:
     target: str = ""
     params: dict[str, Any] = field(default_factory=dict)
     depends_on: tuple[int, ...] = field(default_factory=tuple)
+    condition: str | None = None
     param_bindings: dict[str, str] = field(default_factory=dict)
     description: str = ""
     confidence: float = 0.0

@@ -272,7 +272,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "models": {
         "planner": "llama3",
         "online": "gpt-4o-mini",
-        "asr": "tiny.en",
+        "asr": "base.en",
         "tts": "vits",
         "semantic_embedding": "all-MiniLM-L6-v2",
     },
@@ -281,7 +281,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "vad_threshold": 0.01,
         "silence_duration": 1.5,
         "chunk_size": 0.3,
-        "whisper_model": "tiny.en",
+        "whisper_model": "base.en",
         "background_wake_enabled": False,
         "background_wake_interval_seconds": 1.75,
     },
@@ -426,7 +426,7 @@ def load_settings(memory_db_path: Path | None = None) -> Settings:
             **model_config,
             "planner": _env_str("JARVIS_PLANNER_MODEL", str(model_config.get("planner", "llama3"))),
             "online": _env_str("OPENAI_MODEL", str(model_config.get("online", "gpt-4o-mini"))),
-            "asr": _env_str("JARVIS_ASR_MODEL", str(model_config.get("asr", "tiny.en"))),
+            "asr": _env_str("JARVIS_ASR_MODEL", str(model_config.get("asr", "base.en"))),
             "tts": _env_str("JARVIS_TTS_MODEL", str(model_config.get("tts", "vits"))),
             "semantic_embedding": _env_str(
                 "JARVIS_SEMANTIC_EMBEDDING_MODEL",
@@ -457,8 +457,8 @@ def load_settings(memory_db_path: Path | None = None) -> Settings:
             anthropic_api_key=_env_str("ANTHROPIC_API_KEY"),
             anthropic_model=_env_str("ANTHROPIC_MODEL", "claude-3-haiku-20240307"),
             ollama_url=_env_str("OLLAMA_URL", "http://127.0.0.1:11434"),
-            ollama_model=_env_str("OLLAMA_MODEL", str(model_config.get("planner", "llama3"))),
-            max_tokens=_env_int("JARVIS_PROVIDER_MAX_TOKENS", 512, minimum=1),
+            ollama_model=_env_str("OLLAMA_MODEL", str(model_config.get("planner", "llama3.2"))),
+            max_tokens=_env_int("JARVIS_PROVIDER_MAX_TOKENS", 150, minimum=1),
             request_timeout_seconds=_env_float(
                 "JARVIS_PROVIDER_TIMEOUT_SECONDS",
                 float(runtime_config.get("request_timeout_seconds", 30.0)),

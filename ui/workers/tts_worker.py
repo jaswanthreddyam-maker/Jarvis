@@ -103,7 +103,7 @@ class TTSWorker(QObject):
             try:
                 if self._output_device is not None:
                     self._engine.output_device = self._output_device
-                self._engine.speak(text, blocking=False)
+                self._engine.speak(text, blocking=True)
             except Exception as exc:
                 self.failed.emit(f"TTS failed: {exc}")
                 self.speaking_finished.emit(True)

@@ -8,6 +8,7 @@ from jarvis.core.cancellation import CancellationController
 from jarvis.core.executor import ToolExecutor
 from jarvis.core.memory import MemoryManager
 from jarvis.core.planner import Planner
+from jarvis.runtime.decision_engine import DecisionEngine
 
 
 class JarvisOrchestrator:
@@ -17,8 +18,10 @@ class JarvisOrchestrator:
         planner: Planner,
         executor: ToolExecutor,
         memory: MemoryManager,
-        settings,
-        event_bus=None,
+        settings: Any,
+        decision_engine: DecisionEngine,
+        feedback_loop: Any | None = None,
+        event_bus: Any | None = None,
         scheduler: ReminderScheduler | None = None,
         session_context: SessionContextStore | None = None,
         health_service: Any | None = None,
@@ -28,6 +31,8 @@ class JarvisOrchestrator:
         self._executor = executor
         self._memory = memory
         self._settings = settings
+        self._decision_engine = decision_engine
+        self._feedback_loop = feedback_loop
         self._event_bus = event_bus
         self._scheduler = scheduler or ReminderScheduler()
         self._session_context = session_context or SessionContextStore()
@@ -41,11 +46,18 @@ class JarvisOrchestrator:
 
     async def handle_text_async(
         self,
-        user_input: str,
+        user_input: Any,
         *,
         request_id: int | str | None = None,
     ) -> tuple[str, dict[str, object] | None]:
-        text = str(user_input).strip()
+        if hasattr(user_input, "text"):
+            text = str(user_input.text).strip()
+            decision = user_input
+        else:
+            text = str(user_input).strip()
+            from jarvis.runtime.input_handler import RuntimeInput
+            decision = self._decision_engine.decide(RuntimeInput(text=text, source="api"))
+
         if not text:
             return "I need a request before I can do anything.", {"status": "failed", "steps": []}
 
@@ -60,14 +72,81 @@ class JarvisOrchestrator:
         self._publish("security.user_input", {"request_id": resolved_request_id, "text": text})
         self._publish_status(resolved_request_id, "thinking")
         try:
-            memory_context = self._memory.build_context(text).as_payload()
-            memory_context.update(self._session_context.snapshot().as_payload())
-            plan = await self._planner.build_plan_async(
-                text,
-                memory=memory_context,
-                conversation=self._memory.recent_conversation(limit=6),
-                system_state=self._system_state(),
-            )
+            import asyncio
+            from jarvis.core.context import ExecutionPlan, ExecutionStep
+
+            if decision and decision.kind == "execute_fast":
+                # Resolve a human-readable target from the args
+                _args = decision.args or {}
+                target = (
+                    _args.get("url")
+                    or _args.get("app_name")
+                    or _args.get("path")
+                    or _args.get("name")
+                    or _args.get("query")
+                    or _args.get("text")
+                    or _args.get("value")
+                    or text
+                )
+                plan = ExecutionPlan(
+                    intent=decision.intent,
+                    goal=text,
+                    steps=[
+                        ExecutionStep(
+                            step_id=1,
+                            action=decision.tool,
+                            target=str(target),
+                            params=_args,
+                            depends_on=(),
+                            param_bindings={},
+                            description=f"Fast execution: {decision.tool}",
+                            confidence=1.0,
+                        )
+                    ],
+                    confidence=1.0,
+                )
+            else:
+                raw_memory = self._memory.build_context(text)
+                memory_context = {
+                    "short_term": [item for item in raw_memory.as_payload()["short_term"][-3:]],
+                    "long_term": {
+                        "facts": [f["content"] for f in raw_memory.as_payload()["long_term"].get("facts", [])],
+                        "preferences": raw_memory.as_payload()["long_term"].get("preferences", {})
+                    },
+                    "semantic": [s["content"] for s in raw_memory.as_payload()["semantic"]],
+                    "write_policy": raw_memory.as_payload()["write_policy"]
+                }
+                memory_context.update(self._session_context.snapshot().as_payload())
+
+                try:
+                    plan = await asyncio.wait_for(
+                        self._planner.build_plan_async(
+                            text,
+                            memory=memory_context,
+                            conversation=self._memory.recent_conversation(limit=6),
+                            system_state=self._system_state(),
+                            tier_hint=getattr(decision, "tier_hint", None)
+                        ),
+                        timeout=120.0
+                    )
+                    if len(plan.steps) == 1 and plan.intent not in ("unknown", "error", "planner_message"):
+                        self._decision_engine.cache_intent(text, plan.intent, plan.steps[0].action, plan.steps[0].params)
+                except asyncio.TimeoutError:
+                    response = "Planning timed out. Is your LLM model running?"
+                    snapshot = {
+                        "status": "error",
+                        "user_input": text,
+                        "intent": "unknown",
+                        "goal": text,
+                        "steps": [],
+                        "response": response,
+                    }
+                    self._publish_status(resolved_request_id, "responding")
+                    self._publish_response_chunks(resolved_request_id, response)
+                    self._publish("execution.finalized", {"request_id": resolved_request_id, "status": "failed", "response": response})
+                    self._publish("security.response_sent", {"request_id": resolved_request_id, "response": response})
+                    return response, snapshot
+
             self._publish(
                 "execution.plan_created",
                 {
@@ -114,6 +193,12 @@ class JarvisOrchestrator:
             )
             snapshot = report.as_snapshot(user_input=text, plan=plan)
             self._session_context.remember_plan(text, plan, results=snapshot["steps"])
+            
+            # Phase 5: FeedbackLoop Integration
+            if getattr(self, "_feedback_loop", None):
+                _tier_hint = getattr(decision, "tier_hint", None)
+                tier_source = (_tier_hint.get("resolved_by", "tier3") if isinstance(_tier_hint, dict) else "tier3")
+                self._feedback_loop.observe(text, plan, report, tier_source=tier_source)
             self._memory.add_interaction(text, report.response, metadata={"request_id": resolved_request_id, "success": report.success})
             self._publish_status(resolved_request_id, "responding")
             self._publish_response_chunks(resolved_request_id, report.response)

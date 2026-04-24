@@ -203,7 +203,7 @@ class OnlineProvider:
                     "model": self._settings.providers.ollama_model,
                     "messages": [{"role": "system", "content": system_prompt}, *(context or []), {"role": "user", "content": text}],
                     "stream": False,
-                    "options": {"temperature": temperature},
+                    "options": {"temperature": temperature, "num_predict": self._max_tokens},
                 }
                 if response_format == "json_object":
                     payload["format"] = "json"

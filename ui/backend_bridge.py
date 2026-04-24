@@ -37,6 +37,7 @@ class JarvisBackendBridge(QObject):
     asr_transcribe_requested = Signal(object, int)
     backend_init_requested = Signal()
     backend_process_requested = Signal(int, str)
+    backend_cancel_requested = Signal(int)
     tts_init_requested = Signal()
     tts_speak_requested = Signal(str)
     tts_stop_requested = Signal()
@@ -135,6 +136,7 @@ class JarvisBackendBridge(QObject):
 
         self.backend_init_requested.connect(self._backend.initialize, qc)
         self.backend_process_requested.connect(self._backend.process, qc)
+        self.backend_cancel_requested.connect(self._backend.cancel_request_now, qc)
 
         self.tts_init_requested.connect(self._tts.initialize, qc)
         self.tts_speak_requested.connect(self._tts.speak, qc)
@@ -493,7 +495,7 @@ class JarvisBackendBridge(QObject):
         self._cancelled_requests.add(request_id)
         self._pending_transcripts.pop(request_id, None)
         self._request_contexts.pop(request_id, None)
-        self._backend.cancel_request_now(request_id)
+        self.backend_cancel_requested.emit(request_id)
         self._active_request_id = None
 
     def _prune_cancelled_requests(self, request_id: int) -> None:
@@ -799,7 +801,12 @@ class JarvisBackendBridge(QObject):
         self._set_status(Status.SPEAKING)
         if self._continuous_session:
             self.listener_start_requested.emit()
-        self.tts_speak_requested.emit(final_response)
+            
+        if self.state.model_status.get("tts") == "Ready":
+            self.tts_speak_requested.emit(final_response)
+        else:
+            self.state.add_log("TTS engine unavailable, skipping speech.", source="TTS")
+            self._on_tts_finished(False)
 
     def _finish_text_cycle(self) -> None:
         if self.state.status in {Status.RESPONDING, Status.ERROR}:

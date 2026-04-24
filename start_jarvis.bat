@@ -1,5 +1,6 @@
 @echo off
-set JARVIS_FORCE_MOCK_TTS=1
+set HF_HUB_OFFLINE=1
+set JARVIS_WHISPER_MODEL=base.en
 cd /d "%~dp0"
 if exist ".venv\Scripts\python.exe" (
     ".venv\Scripts\python.exe" scripts\bootstrap_env.py

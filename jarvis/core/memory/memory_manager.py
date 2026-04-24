@@ -46,6 +46,18 @@ class MemoryManager:
         self._long_term = long_term
         self._semantic = semantic
 
+    @property
+    def short_term(self) -> ShortTermMemory:
+        return self._short_term
+
+    @property
+    def long_term(self) -> LongTermMemory:
+        return self._long_term
+
+    @property
+    def semantic(self) -> SemanticMemory:
+        return self._semantic
+
     def add_interaction(
         self,
         user: str,

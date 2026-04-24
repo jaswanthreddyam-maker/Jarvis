@@ -20,7 +20,7 @@ class ExecutionEngine:
 
     async def execute(
         self,
-        text: str,
+        decision: Any,
         *,
         request_id: str,
         timeout_seconds: float | None = None,
@@ -37,7 +37,7 @@ class ExecutionEngine:
         )
         try:
             response, _ = await asyncio.wait_for(
-                self._application.handle_text_async(text, request_id=request_id),
+                self._application.handle_text_async(decision, request_id=request_id),
                 timeout=timeout,
             )
             self._logger.info(

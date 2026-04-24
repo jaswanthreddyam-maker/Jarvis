@@ -142,11 +142,10 @@ def create_app(
                 response=response,
                 task_snapshot=task_snapshot,
             )
-        except Exception as exc:
-            logger.exception(
-                "API execution failed.",
-                extra={"event": "api.execution.failed", "request_id": request_id},
-            )
+        except Exception as e:
+            import traceback
+            logger.error(f"[Executor] Tool execution failed: {e}")
+            logger.error(f"[Executor] Traceback:\n{traceback.format_exc()}")
             await _broadcast_request_failed(
                 app,
                 request_id=request_id,
@@ -155,7 +154,7 @@ def create_app(
             raise HTTPException(
                 status_code=500,
                 detail="Execution failed, but the service is still running.",
-            ) from exc
+            ) from e
 
         return ExecuteResponse(
             request_id=request_id,
@@ -215,11 +214,10 @@ def create_app(
                                 response=response,
                                 task_snapshot=task_snapshot,
                             )
-                        except Exception:
-                            logger.exception(
-                                "WebSocket execution failed.",
-                                extra={"event": "api.websocket.execution.failed", "request_id": current_request_id},
-                            )
+                        except Exception as e:
+                            import traceback
+                            logger.error(f"[Executor] Tool execution failed: {e}")
+                            logger.error(f"[Executor] Traceback:\n{traceback.format_exc()}")
                             await _broadcast_request_failed(
                                 app,
                                 request_id=current_request_id,

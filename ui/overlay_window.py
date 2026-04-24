@@ -915,6 +915,7 @@ class JarvisOverlay(QWidget):
     @Slot(str)
     def show_response(self, text: str):
         """Display an assistant response in the chat history."""
+        print(f"[DEBUG] Displaying response: {text[:80]}", flush=True)
         if QThread.currentThread() != self.thread():
             # Thread-safe: re-dispatch to main thread
             from PySide6.QtCore import QMetaObject, Q_ARG
@@ -929,8 +930,13 @@ class JarvisOverlay(QWidget):
             return
         self._pending_response_text = cleaned
         self._awaiting_response = True
-        self._response_panel.update_assistant_message(cleaned)
+        
+        # Append a new bubble instead of overwriting
+        self._response_panel.finalize_assistant_message(cleaned)
         self._set_response_panel_visible(True)
+        
+        # Re-enable and focus chat input
+        self._chat_panel.ready_for_next_turn()
         self._input_handler.mark_responding()
         self._queue_overlay_update()
         self._sync_frame_loop(immediate=True)

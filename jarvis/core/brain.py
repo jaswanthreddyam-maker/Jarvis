@@ -25,6 +25,7 @@ class BrainModelClient(Protocol):
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -69,6 +70,20 @@ class Brain:
     def tool_catalog(self) -> tuple[ToolDefinition, ...]:
         return self._tool_catalog
 
+    async def _llm_is_reachable(self) -> bool:
+        try:
+            import httpx
+            url = getattr(self._llm_client, "base_url", None)
+            if not url:
+                url = "http://127.0.0.1:11434/"
+            if "openai.com" in url or "anthropic.com" in url:
+                return True
+            async with httpx.AsyncClient() as client:
+                r = await client.get(url, timeout=2.0)
+                return r.status_code == 200
+        except Exception:
+            return False
+
     def extract_intent(
         self,
         text: str,
@@ -76,6 +91,7 @@ class Brain:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> BrainDecision:
         normalized = self._normalize_request(text)
         if not normalized:
@@ -88,6 +104,7 @@ class Brain:
             memory=memory,
             conversation=conversation,
             system_state=system_state,
+            tier_hint=tier_hint,
         )
         logger.info("Brain intent summary: %s", payload)
         return self._coerce_decision(payload, normalized_text=normalized)
@@ -99,6 +116,7 @@ class Brain:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> BrainDecision:
         normalized = self._normalize_request(text)
         if not normalized:
@@ -109,6 +127,7 @@ class Brain:
             memory=memory,
             conversation=conversation,
             system_state=system_state,
+            tier_hint=tier_hint,
         )
         if intent_decision.clarification_question or intent_decision.intent in {"", "unknown"}:
             return intent_decision
@@ -181,6 +200,7 @@ class Brain:
         memory: Any | None = None,
         conversation: list[dict[str, str]] | None = None,
         system_state: dict[str, Any] | None = None,
+        tier_hint: dict[str, Any] | None = None,
     ) -> BrainDecision:
         return await asyncio.to_thread(
             self.understand,
@@ -188,6 +208,7 @@ class Brain:
             memory=memory,
             conversation=conversation,
             system_state=system_state,
+            tier_hint=tier_hint,
         )
 
     async def reflect_async(
@@ -279,7 +300,8 @@ class Brain:
                     "args": payload.get("args", {}),
                     "description": payload.get("description", ""),
                     "confidence": payload.get("confidence", 0.8),
-                    "depends_on_previous": False,
+                    "depends_on": [],
+                    "condition": None,
                     "param_bindings": payload.get("param_bindings", {}),
                     "source": payload.get("source", "brain"),
                 }
@@ -300,7 +322,8 @@ class Brain:
                     params=params,
                     description=str(raw_step.get("description", "")).strip() or self._default_description(action, target),
                     confidence=float(raw_step.get("confidence", 0.8) or 0.8),
-                    depends_on_previous=bool(raw_step.get("depends_on_previous", False)),
+                    depends_on=list(raw_step.get("depends_on", [])),
+                    condition=raw_step.get("condition"),
                     param_bindings={
                         str(key): str(value)
                         for key, value in dict(raw_step.get("param_bindings") or {}).items()

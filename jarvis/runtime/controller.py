@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from config.settings import Settings, load_settings
@@ -20,6 +21,9 @@ class RuntimeOptions:
     debug: bool = False
     voice: bool = False
     test_mode: bool = False
+    companion_mode: bool = False    # New: rumik.ai-style companion mode
+    gateway_mode: bool = False      # New: WebSocket voice gateway mode
+    gateway_port: int = 8766
 
 
 class RuntimeController:
@@ -37,7 +41,7 @@ class RuntimeController:
         self._application = application
         self._logger = logger
         self._settings = settings or load_settings()
-        self._decision_engine = decision_engine or DecisionEngine()
+        self._decision_engine = decision_engine or getattr(application.orchestrator, "_decision_engine", None)
         self._execution_engine = execution_engine or ExecutionEngine(
             application,
             timeout_seconds=self._settings.api.request_timeout_seconds,
@@ -57,12 +61,137 @@ class RuntimeController:
             if options.test_mode:
                 await self._run_test_mode(output)
                 return
-            if options.voice:
-                await self._run_voice_mode(output)
+            if options.companion_mode or options.voice:
+                await self._run_companion_mode(output, options)
+                return
+            if options.gateway_mode:
+                await self._run_gateway_mode(options)
                 return
             await self._run_text_mode(output)
         finally:
             self._shutdown_application()
+
+    # ── Companion Mode (replaces old voice mode) ──────────────────────────
+
+    async def _run_companion_mode(self, output: OutputHandler, options: RuntimeOptions) -> None:
+        """Run the rumik.ai-inspired companion voice experience."""
+        from jarvis.companion.bootstrap import (
+            build_companion_memory,
+            build_llm_handler,
+            build_persona,
+            build_session,
+        )
+
+        self._logger.info("Initializing companion mode...")
+        print("\n" + "=" * 50)
+        print("  COMPANION MODE - Real-Time Voice AI")
+        print("  Powered by rumik.ai-inspired architecture")
+        print("=" * 50 + "\n")
+
+        # Build companion subsystems
+        persona = build_persona(self._settings)
+        legacy_memory = getattr(self._application, "memory", None)
+        if legacy_memory is None and hasattr(self._application, "orchestrator"):
+            legacy_memory = getattr(self._application.orchestrator, "_memory", None)
+
+        memory = build_companion_memory(self._settings, legacy_memory)
+        llm_handler = await build_llm_handler(self._application)
+
+        session = build_session(
+            settings=self._settings,
+            persona=persona,
+            memory=memory,
+            llm_generate=llm_handler,
+            voice_mode=True,
+        )
+
+        # Wire session state to console output
+        def on_state(event: str, data: dict) -> None:
+            if event == "pipeline_state":
+                state = data.get("state", "")
+                indicators = {
+                    "listening": "[MIC] Listening...",
+                    "processing": "[AI] Thinking...",
+                    "speaking": "[SPK] Speaking...",
+                    "interrupted": "[!] Interrupted",
+                    "idle": "[~] Ready",
+                }
+                indicator = indicators.get(state, state)
+                try:
+                    print(f"\r  {indicator}    ", end="", flush=True)
+                except UnicodeEncodeError:
+                    print(f"\r  [{state}]    ", end="", flush=True)
+
+        def on_turn(user_text: str, response: str, frame: Any) -> None:
+            print(f"\n  [You]: {user_text}")
+            print(f"  [Companion]: {response}")
+            if frame.sentiment != "neutral":
+                print(f"  [Mood: {frame.sentiment} | Energy: {frame.user_energy:.1f}]")
+
+        session.set_callbacks(on_state_change=on_state, on_turn_complete=on_turn)
+
+        print("  Starting companion session...\n")
+        print("  Press Ctrl+C to end the session.\n")
+
+        try:
+            await session.start()
+            await session.run_voice_loop()
+        except KeyboardInterrupt:
+            self._logger.info("Keyboard interrupt — ending companion session")
+            print("\n\n  Ending session...")
+        except Exception as exc:
+            self._logger.exception("Companion session error: %s", exc)
+        finally:
+            result = await session.end()
+            turns = result.get("metrics", {})
+            turn_count = getattr(turns, "turn_count", 0) if hasattr(turns, "turn_count") else 0
+            consolidated = result.get("consolidated_memories", [])
+            print(f"\n  Session complete — {turn_count} turns, {len(consolidated)} memories saved")
+            output.stop()
+
+    # ── Gateway Mode (WebSocket server) ───────────────────────────────────
+
+    async def _run_gateway_mode(self, options: RuntimeOptions) -> None:
+        """Run the WebSocket voice gateway for web/mobile clients."""
+        from jarvis.companion.bootstrap import (
+            build_companion_memory,
+            build_gateway,
+            build_llm_handler,
+            build_persona,
+        )
+
+        self._logger.info("Starting voice gateway on port %d...", options.gateway_port)
+
+        persona = build_persona(self._settings)
+        legacy_memory = getattr(self._application, "memory", None)
+        if legacy_memory is None and hasattr(self._application, "orchestrator"):
+            legacy_memory = getattr(self._application.orchestrator, "_memory", None)
+
+        memory = build_companion_memory(self._settings, legacy_memory)
+        llm_handler = await build_llm_handler(self._application)
+
+        gateway = build_gateway(
+            settings=self._settings,
+            persona=persona,
+            memory=memory,
+            llm_generate=llm_handler,
+            port=options.gateway_port,
+        )
+
+        print(f"\n  Voice Gateway running on ws://0.0.0.0:{options.gateway_port}")
+        print("  Press Ctrl+C to stop.\n")
+
+        try:
+            await gateway.start()
+            # Keep running until interrupted
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            self._logger.info("Gateway shutdown requested")
+        finally:
+            await gateway.stop()
+
+    # ── Legacy Modes (preserved) ──────────────────────────────────────────
 
     async def _run_test_mode(self, output: OutputHandler) -> None:
         response = await self._execution_engine.execute(
@@ -71,24 +200,6 @@ class RuntimeController:
         )
         await output.respond_async(response)
         output.stop()
-
-    async def _run_voice_mode(self, output: OutputHandler) -> None:
-        input_handler = VoiceInputHandler(tts_backend=output.backend)
-        output.set_interrupt_callback(self._on_voice_output_finished)
-        input_handler.start()
-        await output.announce_ready_async(voice_mode=True)
-        try:
-            await self._run_session(
-                input_handler,
-                output,
-                speak_farewell=True,
-            )
-        except KeyboardInterrupt:
-            self._logger.info("Keyboard interrupt received")
-        finally:
-            input_handler.stop()
-            output.stop()
-            self._logger.info("Voice loop terminated")
 
     async def _run_text_mode(self, output: OutputHandler) -> None:
         await output.announce_ready_async(voice_mode=False)
@@ -197,7 +308,7 @@ class RuntimeController:
             try:
                 task = asyncio.create_task(
                     self._handle_request(
-                        decision.text,
+                        decision,
                         request_id=request_id,
                         output_queue=output_queue,
                     ),
@@ -210,14 +321,14 @@ class RuntimeController:
 
     async def _handle_request(
         self,
-        text: str,
+        decision: Any,
         *,
         request_id: str,
         output_queue: asyncio.Queue[tuple[str, str] | None],
     ) -> None:
         try:
             response = await self._execution_engine.execute(
-                text,
+                decision,
                 request_id=request_id,
             )
             if response:
