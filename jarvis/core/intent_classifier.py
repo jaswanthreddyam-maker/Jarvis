@@ -47,6 +47,7 @@ class FastResult:
     args: dict = field(default_factory=dict)
     description: str = ""
     elapsed_ms: float = 0.0
+    confidence: float = 1.0
 
 
 _NO_MATCH = FastResult(matched=False)
@@ -140,6 +141,10 @@ def _norm(text: str) -> str:
     """Lowercase + collapse whitespace."""
     return " ".join(text.strip().lower().split())
 
+def _clean_trailing_fillers(val: str) -> str:
+    """Strip common conversational noise from the end of extractions."""
+    val = val.strip()
+    return re.sub(r'\b(please|now|bro|quickly|right now|man|dude|there)\b\s*$', '', val, flags=re.IGNORECASE).strip()
 
 def _extract_browser(phrase: str) -> str | None:
     """Return canonical browser key if phrase contains a browser name."""
@@ -178,7 +183,14 @@ class FastRule:
 
 def _h_open_url(text: str, *, site: str, rest: str = "") -> FastResult:
     """open <site>  /  open <site> in <browser>"""
-    browser = _extract_browser(rest) if rest else None
+    conf = 1.0
+    if rest:
+        browser = _extract_browser(rest)
+        if browser is None:
+            conf = 0.85  # Specified something in `rest` but we failed to parse it
+    else:
+        browser = None
+
     url = _url_for_site(site)
     if url is None:
         # Treat as a bare domain if it looks like one
@@ -191,11 +203,12 @@ def _h_open_url(text: str, *, site: str, rest: str = "") -> FastResult:
     if browser:
         args["browser_app"] = browser
     desc = f"Open {url}" + (f" in {browser}" if browser else "") + "."
-    return FastResult(matched=True, tool="open_url", args=args, description=desc)
+    return FastResult(matched=True, tool="open_url", args=args, description=desc, confidence=conf)
 
 
 def _h_search_on_site(text: str, *, query: str, site: str) -> FastResult:
     """search for <query> on <site>  /  search <query> in youtube"""
+    query = _clean_trailing_fillers(query)
     url = _search_url(site, query)
     if url is None:
         # Fall back to google search mentioning the site
@@ -210,6 +223,7 @@ def _h_search_on_site(text: str, *, query: str, site: str) -> FastResult:
 
 def _h_web_search(text: str, *, query: str) -> FastResult:
     """search for <query>  (no site specified → google)"""
+    query = _clean_trailing_fillers(query)
     url = f"https://www.google.com/search?q={quote_plus(query.strip())}"
     return FastResult(
         matched=True,

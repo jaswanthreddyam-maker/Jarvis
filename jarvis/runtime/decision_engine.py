@@ -26,6 +26,8 @@ class RuntimeDecision:
     tool: str | None = None
     args: dict[str, Any] = field(default_factory=dict)
     tier_hint: dict[str, Any] | None = None
+    permission_level: str = "SAFE"
+    confidence: float = 1.0
 
 
 class DecisionEngine:
@@ -77,13 +79,16 @@ class DecisionEngine:
         if not getattr(normalized_result, "metadata", {}).get("unsafe_normalization"):
             fast = self._intent_classifier.classify(normalized_text)
             if fast.matched:
+                # Execution Safety: Require confirmation for destructive fast-path actions
+                perm = "CONFIRM" if fast.tool in {"delete_folder", "close_app"} else "SAFE"
+                
                 # Synthesise an ActionPolicy so we can cache it
                 policy = ActionPolicy(
                     intent=fast.tool,
                     tool=fast.tool,
                     args=fast.args,
-                    confidence=1.0,
-                    permission_level="SAFE",
+                    confidence=getattr(fast, "confidence", 1.0),
+                    permission_level=perm,
                 )
                 self._cache.set(normalized_text, policy)
                 logger.info(
@@ -126,7 +131,14 @@ class DecisionEngine:
 
     def cache_intent(self, text: str, intent: str, tool: str, args: dict[str, Any]) -> None:
         """Called by the orchestrator after a successful LLM plan resolution."""
-        normalized = self._normalizer.normalize(text)
+        normalized_result = self._normalizer.normalize(text)
+        
+        # 1. Do not cache poisoned inputs (unsafe normalizations)
+        if getattr(normalized_result, "metadata", {}).get("unsafe_normalization"):
+            logger.info("Skipping intent cache for '%s' due to unsafe normalization.", text)
+            return
+            
+        normalized = str(normalized_result)
         policy = ActionPolicy(
             intent=intent,
             tool=tool,
@@ -144,5 +156,7 @@ class DecisionEngine:
             interrupted=command.interrupted,
             intent=policy.intent,
             tool=policy.tool,
-            args=policy.args
+            args=policy.args,
+            permission_level=policy.permission_level,
+            confidence=policy.confidence,
         )

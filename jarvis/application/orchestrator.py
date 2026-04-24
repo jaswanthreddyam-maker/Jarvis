@@ -100,10 +100,11 @@ class JarvisOrchestrator:
                             depends_on=(),
                             param_bindings={},
                             description=f"Fast execution: {decision.tool}",
-                            confidence=1.0,
+                            confidence=getattr(decision, "confidence", 1.0),
+                            permission_level=getattr(decision, "permission_level", "SAFE"),
                         )
                     ],
-                    confidence=1.0,
+                    confidence=getattr(decision, "confidence", 1.0),
                 )
             else:
                 raw_memory = self._memory.build_context(text)
