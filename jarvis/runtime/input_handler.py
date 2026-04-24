@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from jarvis.interfaces.voice_input import VoiceInput
 
@@ -10,6 +11,7 @@ class RuntimeInput:
     text: str
     source: str
     interrupted: bool = False
+    context: Any | None = None
 
 
 class TextInputHandler:

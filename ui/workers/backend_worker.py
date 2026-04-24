@@ -188,7 +188,9 @@ class BackendWorker(QObject):
             tool = str(payload.get("action", "") or payload.get("tool", "") or "").strip()
             state = str(payload.get("status", "") or "").strip().upper()
             message_text = str(payload.get("message", "") or "").strip()
+            confirmation_type = str(payload.get("confirmation_type", "uncertain") or "").strip()
             confirmation_id = str(payload.get("confirmation_id", "") or "").strip()
+            error = str(payload.get("error", "") or "").strip()
             
             if state:
                 self.request_phase_changed.emit(request_id, "EXECUTING", payload)
@@ -200,6 +202,27 @@ class BackendWorker(QObject):
                         "reason": message_text,
                         "activity": f"Confirm action: {tool}",
                         "confirmation_id": confirmation_id,
+                        "confirmation_type": confirmation_type,
+                    }
+                )
+            elif state == "CONFIRMATION_EXPIRED":
+                self.runtime_feedback_ready.emit(
+                    {
+                        "type": "safety",
+                        "safety_level": "EXPIRED",
+                        "reason": message_text,
+                        "activity": f"Request expired: {tool}",
+                        "confirmation_id": None,
+                    }
+                )
+            elif state == "FAILED" and error == "busy_with_confirmation":
+                self.runtime_feedback_ready.emit(
+                    {
+                        "type": "safety",
+                        "safety_level": "BUSY",
+                        "reason": message_text,
+                        "activity": "Finish previous confirmation first",
+                        "confirmation_id": None,
                     }
                 )
             elif message_text:

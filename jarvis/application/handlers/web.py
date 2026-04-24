@@ -12,6 +12,8 @@ def register(registry: ToolRegistry) -> None:
     registry.register("search_web", search_web, "Search the web in a browser tab.", required_params=("query",))
     registry.register("search_youtube", search_youtube, "Search for content on YouTube.", required_params=("query",))
     registry.register("play_youtube", play_youtube, "Open YouTube playback for a query.", required_params=("query",))
+    registry.register("scroll_page", scroll_page, "Scroll the active web page.", required_params=("direction",))
+    registry.register("play_first_video", play_first_video, "Play the first video on the active YouTube page.")
 
 
 def get_time(params: dict[str, object], context) -> ToolResult:
@@ -19,7 +21,7 @@ def get_time(params: dict[str, object], context) -> ToolResult:
     return tool_result("get_time", system_tools.get_time(), target="local time")
 
 
-def open_url(params: dict[str, object], context) -> ToolResult:
+async def open_url(params: dict[str, object], context) -> ToolResult:
     url = str(params.get("url") or params.get("query", "")).strip()
     if not url:
         return ToolResult(success=False, message="No URL provided", error="missing_parameter")
@@ -29,10 +31,12 @@ def open_url(params: dict[str, object], context) -> ToolResult:
     raise_if_cancelled(context, f"Cancelled opening {url}.")
     if should_simulate(params, context):
         return simulated_result("open_url", url, url=web_tools.normalize_url(url), browser_app=browser_app)
-    return tool_result("open_url", web_tools.open_url(url, browser_app=browser_app or None), target=url)
+        
+    controller = context.runtime_state.browser_controller
+    return tool_result("open_url", await controller.open_url(url, browser_app=browser_app or None), target=url)
 
 
-def search_web(params: dict[str, object], context) -> ToolResult:
+async def search_web(params: dict[str, object], context) -> ToolResult:
     query = str(params["query"]).strip()
     browser_app = str(params.get("browser_app", "")).strip()
     raise_if_cancelled(context, f"Cancelled searching for {query}.")
@@ -44,10 +48,12 @@ def search_web(params: dict[str, object], context) -> ToolResult:
             search_url=f"https://www.google.com/search?q={query.replace(' ', '+')}",
             browser_app=browser_app,
         )
-    return tool_result("search_web", web_tools.search_web(query, browser_app=browser_app or None), target=query)
+        
+    controller = context.runtime_state.browser_controller
+    return tool_result("search_web", await controller.search_web(query, browser_app=browser_app or None), target=query)
 
 
-def search_youtube(params: dict[str, object], context) -> ToolResult:
+async def search_youtube(params: dict[str, object], context) -> ToolResult:
     query = str(params["query"]).strip()
     browser_app = str(params.get("browser_app", "")).strip()
     raise_if_cancelled(context, f"Cancelled YouTube search for {query}.")
@@ -59,10 +65,12 @@ def search_youtube(params: dict[str, object], context) -> ToolResult:
             search_url=f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}",
             browser_app=browser_app,
         )
-    return tool_result("search_youtube", web_tools.search_youtube(query, browser_app=browser_app or None), target=query)
+        
+    controller = context.runtime_state.browser_controller
+    return tool_result("search_youtube", await controller.search_youtube(query, browser_app=browser_app or None), target=query)
 
 
-def play_youtube(params: dict[str, object], context) -> ToolResult:
+async def play_youtube(params: dict[str, object], context) -> ToolResult:
     query = str(params["query"]).strip()
     browser_app = str(params.get("browser_app", "")).strip()
     video_url = str(params.get("video_url", "")).strip()
@@ -80,8 +88,27 @@ def play_youtube(params: dict[str, object], context) -> ToolResult:
         else:
             data["search_url"] = target_url
         return simulated_result("play_youtube", query, **data)
+        
+    controller = context.runtime_state.browser_controller
     return tool_result(
         "play_youtube",
-        web_tools.play_youtube(query, browser_app=browser_app or None, video_url=video_url or None),
+        await controller.play_youtube(query, browser_app=browser_app or None, video_url=video_url or None),
         target=query,
     )
+
+async def scroll_page(params: dict[str, object], context) -> ToolResult:
+    direction = str(params.get("direction", "down")).strip()
+    raise_if_cancelled(context, f"Cancelled scrolling {direction}.")
+    if should_simulate(params, context):
+        return simulated_result("scroll_page", direction, direction=direction)
+        
+    controller = context.runtime_state.browser_controller
+    return tool_result("scroll_page", await controller.scroll_page(direction=direction), target=direction)
+
+async def play_first_video(params: dict[str, object], context) -> ToolResult:
+    raise_if_cancelled(context, "Cancelled playing first video.")
+    if should_simulate(params, context):
+        return simulated_result("play_first_video", "first video")
+        
+    controller = context.runtime_state.browser_controller
+    return tool_result("play_first_video", await controller.play_first_video(), target="first video")

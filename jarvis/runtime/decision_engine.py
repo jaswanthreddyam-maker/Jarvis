@@ -88,10 +88,12 @@ class DecisionEngine:
                     logger.info("Tier 0 confidence low (%.2f) — downgrading to Tier 1.", policy.confidence)
                 elif policy.confidence < 0.9:
                     logger.info("Tier 0 confidence borderline (%.2f) — triggering soft confirmation.", policy.confidence)
-                    import uuid
                     decision = self._to_decision("execute_fast", policy, command, normalized_text)
-                    decision.requires_confirmation = True
-                    decision.confirmation_id = str(uuid.uuid4())
+                    
+                    decision.args["_requires_confirmation"] = True
+                    decision.args["_confirmation_type"] = "uncertain"
+                    tool_desc = fast.metadata.get("target") or policy.tool
+                    decision.args["_confirmation_message"] = f"Did you mean to run '{tool_desc}'?"
                     return decision
                 else:
                     self._cache.set(normalized_text, policy)
@@ -167,19 +169,24 @@ class DecisionEngine:
 
     def _apply_policy(self, fast: FastResult) -> ActionPolicy:
         """Risk analysis and policy arbitration for fast-path intents."""
-        perm = "safe"
+        perm = "SAFE"
         conf = fast.confidence
+        args = dict(fast.args)
         
         # 1. Tool-level risk escalation
         if fast.tool in {"delete_folder", "remove_folder", "delete_file"}:
-            perm = "dangerous"
+            perm = "DANGEROUS"
+            args["_confirmation_type"] = "destructive"
         elif fast.tool in {"close_app", "system_action"}:
-            perm = "moderate"
+            perm = "MODERATE"
             
         # 2. Content-level risk escalation (e.g. external URLs)
         if fast.metadata.get("is_external"):
             # External URL navigation is promoted to MODERATE to prevent blind phishing
-            perm = "moderate"
+            perm = "MODERATE"
+            args["_requires_confirmation"] = True
+            args["_confirmation_type"] = "external"
+            args["_confirmation_message"] = f"Open external site '{args.get('url', 'URL')}'?"
             
         # 3. Behavioral Overrides (Confirmation Fatigue Protection)
         # TODO: Check usage history here to auto-allow repeated safe actions
@@ -187,7 +194,7 @@ class DecisionEngine:
         return ActionPolicy(
             intent=fast.tool,
             tool=fast.tool,
-            args=fast.args,
+            args=args,
             confidence=conf,
             permission_level=perm,
         )

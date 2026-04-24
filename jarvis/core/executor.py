@@ -15,6 +15,15 @@ from jarvis.core.tools import ToolContext, ToolRegistry, ToolResult
 
 
 @dataclass(slots=True)
+class ExecutionContext:
+    current_domain: str | None = None
+    last_action: str | None = None
+    active_tab_id: str | None = None
+    last_url: str | None = None
+    open_tabs_count: int = 0
+
+
+@dataclass(slots=True)
 class StepExecutionResult:
     step_id: int
     action: str
@@ -88,6 +97,23 @@ class ToolExecutor:
         self._cancellation_controller = cancellation_controller or CancellationController()
         self._default_mode = default_mode
         self._pending_confirmations: dict[str, dict[str, Any]] = {}
+        self._last_state: dict[str, Any] = {}
+        self._execution_context = ExecutionContext()
+        
+    def get_context(self) -> ExecutionContext:
+        return self._execution_context
+
+    async def wait_until_idle(self, timeout: float = 5.0) -> bool:
+        import time
+        start = time.time()
+        while time.time() - start < timeout:
+            if self._is_idle():
+                return True
+            await asyncio.sleep(0.1)
+        return False
+
+    def _is_idle(self) -> bool:
+        return self._last_state.get("dom_ready", True)
 
     def confirm(self, confirmation_id: str, confirmed: bool = True) -> None:
         """Resolves a pending confirmation token, resuming execution."""
@@ -296,6 +322,21 @@ class ToolExecutor:
             permission_level=permission_level,
         )
         if confirmation_block is not None:
+            if len(self._pending_confirmations) >= 1:
+                result = StepExecutionResult(
+                    step_id=step.step_id,
+                    action=step.action,
+                    target=step.target,
+                    params=validation.sanitized_params,
+                    success=False,
+                    message="Finish previous confirmation first.",
+                    error="busy_with_confirmation",
+                    status="failed",
+                    permission_level=permission_level.value,
+                )
+                self._publish_execution_update(request_id, step, result)
+                return result
+                
             import uuid
             confirmation_id = str(uuid.uuid4())
             result = StepExecutionResult(
@@ -319,10 +360,11 @@ class ToolExecutor:
             
             try:
                 logger.info("Halting execution for confirmation token: %s", confirmation_id)
+                await asyncio.sleep(0)
                 confirmed = await asyncio.wait_for(future, timeout=30.0)
             except asyncio.TimeoutError:
                 logger.warning("Confirmation timed out for token: %s", confirmation_id)
-                result.status = "cancelled"
+                result.status = "confirmation_expired"
                 result.error = "confirmation_timeout"
                 result.message = "Confirmation timed out after 30 seconds."
                 return result
@@ -331,8 +373,8 @@ class ToolExecutor:
                 
             if not confirmed:
                 result.status = "cancelled"
-                result.error = "confirmation_denied"
-                result.message = "User denied execution."
+                result.error = "user_cancelled"
+                result.message = "User cancelled execution."
                 return result
                 
             logger.info("Confirmation received for token: %s. Resuming execution.", confirmation_id)
@@ -441,6 +483,28 @@ class ToolExecutor:
             status=tool_result.status,
             permission_level=permission_level.value,
         )
+        if "state" in result.data and isinstance(result.data["state"], dict):
+            self._last_state.update(result.data["state"])
+            
+        self._execution_context.last_action = step.action
+        if "domain" in result.data and result.data["domain"]:
+            self._execution_context.current_domain = str(result.data["domain"])
+        elif "url" in result.data:
+            from urllib.parse import urlparse
+            try:
+                self._execution_context.current_domain = urlparse(str(result.data["url"])).netloc.replace("www.", "").split(".")[0]
+            except Exception:
+                pass
+                
+        if "url" in result.data:
+            self._execution_context.last_url = str(result.data["url"])
+                
+        if "tab_id" in result.data:
+            self._execution_context.active_tab_id = str(result.data["tab_id"])
+            
+        if "open_tabs_count" in result.data:
+            self._execution_context.open_tabs_count = int(result.data["open_tabs_count"])
+            
         if self._event_bus is not None:
             self._event_bus.publish(
                 "action.completed" if result.success else "action.failed",
@@ -481,13 +545,27 @@ class ToolExecutor:
         permission_level: PermissionLevel,
     ) -> ToolResult | None:
         normalized_action = str(action_name).strip().lower()
-        if permission_level != PermissionLevel.DANGEROUS or bool(params.get("_confirmed", False)):
+        if bool(params.get("_confirmed", False)):
             return None
+            
+        confirmation_type = params.get("_confirmation_type")
+        message = params.get("_confirmation_message")
+        
+        if not confirmation_type:
+            if permission_level == PermissionLevel.DANGEROUS:
+                confirmation_type = "destructive"
+                message = f"Confirmation required before running dangerous tool '{normalized_action}'."
+            elif params.get("_requires_confirmation"):
+                confirmation_type = "uncertain"
+                message = f"Did you mean to run '{normalized_action}'?"
+            else:
+                return None
+                
         return ToolResult(
             success=False,
-            message=f"Confirmation required before running dangerous tool '{normalized_action}'.",
+            message=message or f"Confirmation required for '{normalized_action}'.",
             error="confirmation_required",
-            data={"needs_confirmation": True},
+            data={"needs_confirmation": True, "confirmation_type": confirmation_type},
         )
 
     @staticmethod
@@ -566,5 +644,7 @@ class ToolExecutor:
         }
         if confirmation_id:
             event_data["confirmation_id"] = confirmation_id
+            if isinstance(payload, StepExecutionResult) and payload.data:
+                event_data["confirmation_type"] = payload.data.get("confirmation_type", "uncertain")
 
         self._event_bus.publish("runtime.execution_update", event_data)

@@ -39,6 +39,8 @@ class JarvisOrchestrator:
         self._health_service = health_service
         self._cancellation_controller = cancellation_controller or CancellationController()
         self._active_requests: set[str] = set()
+        from jarvis.infrastructure.web.controller import BrowserController
+        self.browser_controller = BrowserController()
 
     @property
     def is_busy(self) -> bool:
@@ -73,9 +75,168 @@ class JarvisOrchestrator:
         self._publish_status(resolved_request_id, "thinking")
         try:
             import asyncio
+            import re
             from jarvis.core.context import ExecutionPlan, ExecutionStep
+            from jarvis.runtime.input_handler import RuntimeInput
 
-            if decision and decision.kind == "execute_fast":
+            raw_commands = [c.strip() for c in re.split(r'\b(?:and|then)\b', text, flags=re.IGNORECASE) if c.strip()]
+            
+            plan = None
+            if len(raw_commands) > 1:
+                fast_decisions = []
+                failed_idx = None
+                current_context = None
+                if hasattr(self._executor, "get_context"):
+                    current_context = self._executor.get_context().current_domain
+                    
+                has_destructive = False
+                source = getattr(user_input, "source", "api")
+                
+                for idx, cmd in enumerate(raw_commands):
+                    if current_context and not re.search(r'\b(?:in|on)\b', cmd, flags=re.IGNORECASE):
+                        cmd_with_ctx = f"{cmd} on {current_context}"
+                    else:
+                        cmd_with_ctx = cmd
+                        
+                    runtime_input = RuntimeInput(text=cmd_with_ctx, source=source)
+                    if hasattr(self._executor, "get_context"):
+                        runtime_input.context = self._executor.get_context()
+                    sub_decision = self._decision_engine.decide(runtime_input)
+                    
+                    if sub_decision:
+                        _a = sub_decision.args or {}
+                        if sub_decision.tool in {"delete_folder", "remove_folder", "delete_file", "close_app", "system_action"} or _a.get("_requires_confirmation"):
+                            has_destructive = True
+                            
+                    if sub_decision and sub_decision.kind == "execute_fast":
+                        _a = sub_decision.args or {}
+                        t = _a.get("url") or _a.get("app_name") or _a.get("path") or _a.get("name") or _a.get("query") or _a.get("value") or cmd
+                        
+                        if sub_decision.tool == "open_url" and "url" in _a:
+                            from urllib.parse import urlparse
+                            domain = urlparse(str(_a["url"])).netloc
+                            domain = domain.replace("www.", "").split(".")[0]
+                            current_context = domain
+                            
+                        # Intent Merging: Avoid redundant tabs for "open X and search on X"
+                        SAFE_TO_MERGE = {"open_url", "search_web", "search_youtube", "play_youtube"}
+                        TOOL_DOMAIN_MAP = {
+                            "search_youtube": "youtube",
+                            "play_youtube": "youtube",
+                            "search_web": "google"
+                        }
+                        if len(fast_decisions) > 0:
+                            _, _, prev_decision, prev_a, _ = fast_decisions[-1]
+                            if prev_decision.tool in SAFE_TO_MERGE and sub_decision.tool in SAFE_TO_MERGE:
+                                if prev_decision.tool == "open_url" and "url" in prev_a:
+                                    from urllib.parse import urlparse
+                                    prev_domain = urlparse(str(prev_a["url"])).netloc.replace("www.", "").split(".")[0]
+                                    
+                                    curr_domain = TOOL_DOMAIN_MAP.get(sub_decision.tool)
+                                        
+                                    if curr_domain and curr_domain == prev_domain:
+                                        # Redundant open_url detected (e.g. open youtube -> search youtube). Drop it!
+                                        fast_decisions.pop()
+                            
+                        fast_decisions.append((idx, cmd, sub_decision, _a, t))
+                    else:
+                        failed_idx = idx
+                        break
+                        
+                if failed_idx is None:
+                    # All steps successfully matched fast-path
+                    plan = ExecutionPlan(
+                        intent="multi_step_fast",
+                        goal=text,
+                        steps=[
+                            ExecutionStep(
+                                step_id=i+1,
+                                action=sub_decision.tool,
+                                target=str(t),
+                                params=_a,
+                                depends_on=(i,) if i > 0 else (),
+                                param_bindings={},
+                                description=f"Fast execution: {sub_decision.tool}",
+                                confidence=getattr(sub_decision, "confidence", 1.0)
+                            ) for i, (_, _, sub_decision, _a, t) in enumerate(fast_decisions)
+                        ],
+                        confidence=1.0,
+                    )
+                elif failed_idx > 0 and not has_destructive:
+                    # Partial match! Safe incremental speculative execution
+                    safe_fast_tools = {"open_url", "search_on_site", "open_explorer"}
+                    if all(sub_decision.tool in safe_fast_tools for _, _, sub_decision, _, _ in fast_decisions):
+                        # Execute safe fast steps immediately
+                        partial_plan = ExecutionPlan(
+                            intent="incremental_fast",
+                            goal=" and ".join(cmd for _, cmd, _, _, _ in fast_decisions),
+                            steps=[
+                                ExecutionStep(
+                                    step_id=i+1,
+                                    action=sub_decision.tool,
+                                    target=str(t),
+                                    params=_a,
+                                    depends_on=(i,) if i > 0 else (),
+                                    param_bindings={},
+                                    description=f"Fast execution: {sub_decision.tool}",
+                                    confidence=getattr(sub_decision, "confidence", 1.0)
+                                ) for i, (_, _, sub_decision, _a, t) in enumerate(fast_decisions)
+                            ],
+                            confidence=1.0
+                        )
+                        
+                        self._publish("execution.plan_created", {
+                            "request_id": resolved_request_id,
+                            "goal": partial_plan.goal,
+                            "intent": partial_plan.intent,
+                            "step_count": len(partial_plan.steps),
+                            "steps": [{"step_id": s.step_id, "action": s.action, "target": s.target, "depends_on": list(s.depends_on)} for s in partial_plan.steps]
+                        })
+                        self._publish_status(resolved_request_id, "executing")
+                        
+                        report = await self._executor.execute_plan(
+                            partial_plan,
+                            request_id=resolved_request_id,
+                            goal=partial_plan.goal,
+                            concurrency_mode="sequential",
+                            runtime_state=self,
+                        )
+                        
+                        if report.success:
+                            # State Readiness Signal
+                            if hasattr(self._executor, "wait_until_idle"):
+                                await self._executor.wait_until_idle()
+                            else:
+                                await asyncio.sleep(0.5)
+                            
+                            # Rewrite 'text' to ONLY be the remaining commands
+                            text = " and ".join(raw_commands[failed_idx:])
+                            
+                            # Structured Context Engine injection
+                            self._speculative_context = [
+                                {
+                                    "action_performed": sub_decision.tool,
+                                    "target": str(t),
+                                    "parameters_used": _a
+                                } for _, _, sub_decision, _a, t in fast_decisions
+                            ]
+                        else:
+                            # Speculative execution failed. Abort context injection.
+                            # Fallback will parse the original full text.
+                            pass
+                            
+                        # Force LLM fallback for remainder
+                        decision = None
+                        self._publish_status(resolved_request_id, "thinking")
+                    else:
+                        decision = None
+                else:
+                    # Failed at first step, standard LLM fallback
+                    decision = None
+
+            if plan is not None:
+                pass
+            elif decision and decision.kind == "execute_fast":
                 # Resolve a human-readable target from the args
                 _args = decision.args or {}
                 target = (
@@ -101,7 +262,6 @@ class JarvisOrchestrator:
                             param_bindings={},
                             description=f"Fast execution: {decision.tool}",
                             confidence=getattr(decision, "confidence", 1.0),
-                            permission_level=getattr(decision, "permission_level", "SAFE"),
                         )
                     ],
                     confidence=getattr(decision, "confidence", 1.0),
@@ -118,6 +278,10 @@ class JarvisOrchestrator:
                     "write_policy": raw_memory.as_payload()["write_policy"]
                 }
                 memory_context.update(self._session_context.snapshot().as_payload())
+                
+                if hasattr(self, "_speculative_context") and self._speculative_context:
+                    memory_context["speculative_execution_completed"] = self._speculative_context
+                    self._speculative_context = []
 
                 try:
                     plan = await asyncio.wait_for(
@@ -188,11 +352,14 @@ class JarvisOrchestrator:
                 return response, snapshot
 
             self._publish_status(resolved_request_id, "executing")
+            
+            has_browser_actions = any(s.action in {"open_url", "search_web", "search_youtube", "play_youtube", "scroll_page", "play_first_video"} for s in plan.steps)
+            
             report = await self._executor.execute_plan(
                 plan,
                 request_id=resolved_request_id,
                 goal=text,
-                concurrency_mode="auto",
+                concurrency_mode="sequential" if has_browser_actions else "auto",
                 runtime_state=self,
             )
             snapshot = report.as_snapshot(user_input=text, plan=plan)
@@ -223,10 +390,12 @@ class JarvisOrchestrator:
             raise
         finally:
             self._active_requests.discard(resolved_request_id)
+            if hasattr(self, "_speculative_context"):
+                self._speculative_context = []
 
     def confirm_step(self, confirmation_id: str, confirmed: bool = True) -> None:
-        if hasattr(self._tool_executor, "confirm"):
-            self._tool_executor.confirm(confirmation_id, confirmed)
+        if hasattr(self._executor, "confirm"):
+            self._executor.confirm(confirmation_id, confirmed)
 
     def finish_request(self, request_id: int | str | None = None) -> None:
         resolved = str(request_id or "").strip()

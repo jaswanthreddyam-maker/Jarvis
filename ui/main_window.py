@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from ui.backend_bridge import JarvisBackendBridge
 from ui.overlay_window import JarvisOverlay
+from ui.widgets.confirmation_overlay import ConfirmationOverlay
 from ui.panels.controls_panel import ControlsPanel
 from ui.panels.intelligence_panel import IntelligencePanel
 from ui.panels.logs_panel import LogsPanel
@@ -146,6 +147,11 @@ class JarvisMainWindow(QMainWindow):
         # Desktop overlay (separate top-level window)
         self.overlay = JarvisOverlay()
         self.overlay.register_hotkey()
+
+        # Global confirmation overlay
+        self.confirmation_overlay = ConfirmationOverlay()
+        self.confirmation_overlay.confirmed.connect(lambda cid: self.bridge.backend_confirm_requested.emit(cid, True))
+        self.confirmation_overlay.cancelled.connect(lambda cid: self.bridge.backend_confirm_requested.emit(cid, False))
 
         self._setup_tray()
         self._wire_state()
@@ -436,6 +442,7 @@ class JarvisMainWindow(QMainWindow):
         tone = {
             "SAFE": "success",
             "CONFIRMATION REQUIRED": "warning",
+            "EXPIRED": "warning",
             "BLOCKED": "danger",
         }.get(safety_level, "muted")
         self.safety_badge.set_text(safety_level, tone)
@@ -444,21 +451,25 @@ class JarvisMainWindow(QMainWindow):
         if safety_level == "CONFIRMATION REQUIRED":
             confirmation_id = payload.get("confirmation_id")
             if confirmation_id:
-                from PySide6.QtWidgets import QMessageBox
-                msg = QMessageBox(self)
-                msg.setIcon(QMessageBox.Icon.Warning)
-                msg.setWindowTitle("Confirmation Required")
-                msg.setText(f"Jarvis requests permission:\n{payload.get('activity', 'Execute Action')}")
-                msg.setInformativeText(payload.get("reason", "Are you sure you want to proceed?"))
-                msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
-                msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+                title = payload.get("activity", "Execute Action")
+                reason = payload.get("reason", "Are you sure you want to proceed?")
+                c_type = payload.get("confirmation_type", "uncertain")
                 
-                def on_finished(result):
-                    confirmed = (result == QMessageBox.StandardButton.Yes)
-                    self.bridge.backend_confirm_requested.emit(confirmation_id, confirmed)
-                    
-                msg.finished.connect(on_finished)
-                msg.show()
+                from PySide6.QtCore import QMetaObject, Q_ARG, Qt
+                QMetaObject.invokeMethod(
+                    self.confirmation_overlay,
+                    "show_confirmation",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, confirmation_id),
+                    Q_ARG(str, title),
+                    Q_ARG(str, reason),
+                    Q_ARG(str, c_type)
+                )
+        elif safety_level == "EXPIRED":
+            # Just push a toast
+            self.state.push_toast("Request Expired", payload.get("activity", "The confirmation timed out."), "warning")
+        elif safety_level == "BUSY":
+            self.state.push_toast("System Busy", payload.get("activity", "Finish previous confirmation first."), "warning")
 
     def _on_ui_notify(self, title: str, message: str) -> None:
         from PySide6.QtCore import QMetaObject, Q_ARG, Qt
@@ -509,6 +520,7 @@ class JarvisMainWindow(QMainWindow):
         else:
             self.overlay.unregister_hotkey()
             self.overlay.hide_overlay()
+            self.confirmation_overlay.hide()
             self.bridge.stop_listening_continuous()
             self.bridge.shutdown()
             from PySide6.QtWidgets import QApplication
