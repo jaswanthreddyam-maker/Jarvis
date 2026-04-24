@@ -38,6 +38,7 @@ class JarvisBackendBridge(QObject):
     backend_init_requested = Signal()
     backend_process_requested = Signal(int, str)
     backend_cancel_requested = Signal(int)
+    backend_confirm_requested = Signal(str, bool)
     tts_init_requested = Signal()
     tts_speak_requested = Signal(str)
     tts_stop_requested = Signal()
@@ -137,6 +138,7 @@ class JarvisBackendBridge(QObject):
         self.backend_init_requested.connect(self._backend.initialize, qc)
         self.backend_process_requested.connect(self._backend.process, qc)
         self.backend_cancel_requested.connect(self._backend.cancel_request_now, qc)
+        self.backend_confirm_requested.connect(self._backend.confirm_step, qc)
 
         self.tts_init_requested.connect(self._tts.initialize, qc)
         self.tts_speak_requested.connect(self._tts.speak, qc)
@@ -820,6 +822,7 @@ class JarvisBackendBridge(QObject):
                 reason=str(details.get("reason", "")).strip(),
                 activity=str(details.get("activity", "")).strip(),
                 scope=str(details.get("scope", "single")).strip() or "single",
+                confirmation_id=str(details.get("confirmation_id", "")).strip() or None,
             )
         elif payload_type == "finalized":
             self.state.set_safety_feedback(

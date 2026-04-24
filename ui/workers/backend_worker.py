@@ -93,6 +93,16 @@ class BackendWorker(QObject):
         self._send({"type": "cancel", "request_id": str(request_id)})
         return True
 
+    def confirm_step(self, confirmation_id: str, confirmed: bool = True) -> None:
+        if not self._connected or self._socket is None:
+            return
+        self._send({
+            "type": "confirm",
+            "confirmation_id": str(confirmation_id),
+            "confirmed": bool(confirmed)
+        })
+
+
     @Slot(bool)
     def set_safe_mode(self, enabled: bool) -> None:
         self._safe_mode = bool(enabled)
@@ -175,12 +185,24 @@ class BackendWorker(QObject):
             return
 
         if message_type == "execution_update" and request_id is not None:
-            tool = str(payload.get("tool", "") or "").strip()
+            tool = str(payload.get("action", "") or payload.get("tool", "") or "").strip()
             state = str(payload.get("status", "") or "").strip().upper()
             message_text = str(payload.get("message", "") or "").strip()
+            confirmation_id = str(payload.get("confirmation_id", "") or "").strip()
+            
             if state:
                 self.request_phase_changed.emit(request_id, "EXECUTING", payload)
-            if message_text:
+            if state == "NEEDS_CONFIRMATION" and confirmation_id:
+                self.runtime_feedback_ready.emit(
+                    {
+                        "type": "safety",
+                        "safety_level": "CONFIRMATION REQUIRED",
+                        "reason": message_text,
+                        "activity": f"Confirm action: {tool}",
+                        "confirmation_id": confirmation_id,
+                    }
+                )
+            elif message_text:
                 self.log.emit("Backend", f"[{tool or 'tool'}] {message_text}")
                 self.runtime_feedback_ready.emit(
                     {

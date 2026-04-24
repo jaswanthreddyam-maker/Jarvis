@@ -224,6 +224,10 @@ class JarvisOrchestrator:
         finally:
             self._active_requests.discard(resolved_request_id)
 
+    def confirm_step(self, confirmation_id: str, confirmed: bool = True) -> None:
+        if hasattr(self._tool_executor, "confirm"):
+            self._tool_executor.confirm(confirmation_id, confirmed)
+
     def finish_request(self, request_id: int | str | None = None) -> None:
         resolved = str(request_id or "").strip()
         if resolved:

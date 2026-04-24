@@ -240,6 +240,13 @@ def create_app(
                     )
                     continue
 
+                if message_type == "confirm":
+                    confirmation_id = str(message.get("confirmation_id", "") or "").strip()
+                    confirmed = bool(message.get("confirmed", True))
+                    if confirmation_id and hasattr(app.state.application, "confirm_step"):
+                        app.state.application.confirm_step(confirmation_id, confirmed)
+                    continue
+
                 await app.state.websocket_hub.send(
                     websocket,
                     {

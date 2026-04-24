@@ -440,6 +440,25 @@ class JarvisMainWindow(QMainWindow):
         }.get(safety_level, "muted")
         self.safety_badge.set_text(safety_level, tone)
         self._update_slim_status()
+        
+        if safety_level == "CONFIRMATION REQUIRED":
+            confirmation_id = payload.get("confirmation_id")
+            if confirmation_id:
+                from PySide6.QtWidgets import QMessageBox
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setWindowTitle("Confirmation Required")
+                msg.setText(f"Jarvis requests permission:\n{payload.get('activity', 'Execute Action')}")
+                msg.setInformativeText(payload.get("reason", "Are you sure you want to proceed?"))
+                msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+                msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+                
+                def on_finished(result):
+                    confirmed = (result == QMessageBox.StandardButton.Yes)
+                    self.bridge.backend_confirm_requested.emit(confirmation_id, confirmed)
+                    
+                msg.finished.connect(on_finished)
+                msg.show()
 
     def _on_ui_notify(self, title: str, message: str) -> None:
         from PySide6.QtCore import QMetaObject, Q_ARG, Qt

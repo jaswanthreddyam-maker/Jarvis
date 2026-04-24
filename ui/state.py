@@ -170,6 +170,7 @@ class AppState(QObject):
         reason: str | None = None,
         activity: str | None = None,
         scope: str | None = None,
+        confirmation_id: str | None = None,
     ) -> None:
         changed = False
         if safety_level is not None and self.safety_feedback.get("safety_level") != safety_level:
@@ -183,6 +184,9 @@ class AppState(QObject):
             changed = True
         if scope is not None and self.safety_feedback.get("scope") != scope:
             self.safety_feedback["scope"] = scope
+            changed = True
+        if confirmation_id is not None:
+            self.safety_feedback["confirmation_id"] = confirmation_id
             changed = True
         if changed:
             self.safety_feedback_changed.emit(dict(self.safety_feedback))

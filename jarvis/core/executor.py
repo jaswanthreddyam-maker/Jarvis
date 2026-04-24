@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger("Jarvis.ToolExecutor")
 
 from jarvis.core.cancellation import CancelledError, CancellationController
 from jarvis.core.context import ExecutionPlan, ExecutionStep
@@ -23,6 +26,7 @@ class StepExecutionResult:
     data: dict[str, Any] = field(default_factory=dict)
     status: str = "completed"
     permission_level: str = PermissionLevel.SAFE.value
+    confirmation_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -83,6 +87,13 @@ class ToolExecutor:
         self._event_bus = event_bus
         self._cancellation_controller = cancellation_controller or CancellationController()
         self._default_mode = default_mode
+        self._pending_confirmations: dict[str, dict[str, Any]] = {}
+
+    def confirm(self, confirmation_id: str, confirmed: bool = True) -> None:
+        """Resolves a pending confirmation token, resuming execution."""
+        future = self._pending_confirmations.get(confirmation_id)
+        if future and not future.done():
+            future.set_result(confirmed)
 
     async def execute_plan(
         self,
@@ -285,6 +296,8 @@ class ToolExecutor:
             permission_level=permission_level,
         )
         if confirmation_block is not None:
+            import uuid
+            confirmation_id = str(uuid.uuid4())
             result = StepExecutionResult(
                 step_id=step.step_id,
                 action=step.action,
@@ -296,9 +309,33 @@ class ToolExecutor:
                 data=dict(confirmation_block.data),
                 status=confirmation_block.status,
                 permission_level=permission_level.value,
+                confirmation_id=confirmation_id,
             )
+            
+            # Intercept and pause execution
+            future = asyncio.get_running_loop().create_future()
+            self._pending_confirmations[confirmation_id] = future
             self._publish_execution_update(request_id, step, result)
-            return result
+            
+            try:
+                logger.info("Halting execution for confirmation token: %s", confirmation_id)
+                confirmed = await asyncio.wait_for(future, timeout=30.0)
+            except asyncio.TimeoutError:
+                logger.warning("Confirmation timed out for token: %s", confirmation_id)
+                result.status = "cancelled"
+                result.error = "confirmation_timeout"
+                result.message = "Confirmation timed out after 30 seconds."
+                return result
+            finally:
+                self._pending_confirmations.pop(confirmation_id, None)
+                
+            if not confirmed:
+                result.status = "cancelled"
+                result.error = "confirmation_denied"
+                result.message = "User denied execution."
+                return result
+                
+            logger.info("Confirmation received for token: %s. Resuming execution.", confirmation_id)
 
         # Intent Contradiction Guard: Add a micro-delay for dangerous actions
         # to allow for immediate human correction/cancellation.
@@ -309,7 +346,7 @@ class ToolExecutor:
                     step_id=step.step_id,
                     action=step.action,
                     target=step.target,
-                    params=dict(sandbox.sanitized_params),
+                    params=dict(validation.sanitized_params),
                     success=False,
                     message="Cancelled during human correction window.",
                     error="cancelled",
@@ -499,12 +536,14 @@ class ToolExecutor:
         if self._event_bus is None:
             return
 
+        confirmation_id = None
         if isinstance(payload, StepExecutionResult):
             message = payload.message
             success = payload.success
             status = payload.status
             error = payload.error
             permission_level = payload.permission_level
+            confirmation_id = payload.confirmation_id
         else:
             message = str(payload.get("message", "") or "").strip()
             success = bool(payload.get("success", True))
@@ -512,18 +551,20 @@ class ToolExecutor:
             error = str(payload.get("error", "") or "").strip() or None
             permission_level = str(payload.get("permission_level", "") or "").strip()
 
-        self._event_bus.publish(
-            "runtime.execution_update",
-            {
-                "type": "execution_update",
-                "request_id": request_id,
-                "step_id": step.step_id,
-                "tool": step.action,
-                "target": step.target,
-                "status": status,
-                "success": success,
-                "message": message,
-                "error": error,
-                "permission_level": permission_level,
-            },
-        )
+        event_data: dict[str, Any] = {
+            "type": "execution_update",
+            "request_id": request_id,
+            "step_id": step.step_id,
+            "action": step.action,
+            "tool": step.action,
+            "target": step.target,
+            "status": "needs_confirmation" if confirmation_id else status,
+            "success": success,
+            "message": message,
+            "error": error,
+            "permission_level": permission_level,
+        }
+        if confirmation_id:
+            event_data["confirmation_id"] = confirmation_id
+
+        self._event_bus.publish("runtime.execution_update", event_data)

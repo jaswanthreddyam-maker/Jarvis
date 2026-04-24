@@ -28,6 +28,8 @@ class RuntimeDecision:
     tier_hint: dict[str, Any] | None = None
     permission_level: str = "SAFE"
     confidence: float = 1.0
+    requires_confirmation: bool = False
+    confirmation_id: str | None = None
 
 
 class DecisionEngine:
@@ -82,8 +84,15 @@ class DecisionEngine:
                 policy = self._apply_policy(fast)
                 
                 # Confidence Floor: if Tier 0 is unsure, let the LLM take a look
-                if policy.confidence < 0.9:
+                if policy.confidence < 0.85:
                     logger.info("Tier 0 confidence low (%.2f) — downgrading to Tier 1.", policy.confidence)
+                elif policy.confidence < 0.9:
+                    logger.info("Tier 0 confidence borderline (%.2f) — triggering soft confirmation.", policy.confidence)
+                    import uuid
+                    decision = self._to_decision("execute_fast", policy, command, normalized_text)
+                    decision.requires_confirmation = True
+                    decision.confirmation_id = str(uuid.uuid4())
+                    return decision
                 else:
                     self._cache.set(normalized_text, policy)
                     logger.info(
