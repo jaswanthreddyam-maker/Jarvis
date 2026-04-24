@@ -26,87 +26,104 @@ class InputNormalizer:
             "crome": "chrome",
         }
 
-        # 1. Wake word pattern
-        self._wake_pattern = re.compile(r'^(jarvis|hey jarvis|hi jarvis)\b', re.IGNORECASE)
-
-        # 2. Only remove fillers at START of sentence
-        self._filler_pattern = re.compile(
-            r'^(?:please|can you|could you|would you|just|kindly|go ahead and|hey|hi|hello)\b',
+        # Stronger wake pattern
+        self._wake_pattern = re.compile(
+            r'^(?:hey\s+|hi\s+)?jarvis[\s,]*',
             re.IGNORECASE
         )
 
-        # 3. Safe dedupe verbs
+        # Multi-pass filler removal
+        self._filler_pattern = re.compile(
+            r'^(please|can you|could you|would you|just|kindly|go ahead and|hey|hi|hello)\b\s*',
+            re.IGNORECASE
+        )
+
         self._dedupe_tokens = {"open", "play", "go", "stop", "do", "search", "show"}
 
-        # 4. Known multi-word entities
-        self._known_phrases = ["google chrome", "visual studio code", "stack overflow"]
+        self._known_phrases = [
+            "google chrome",
+            "visual studio code",
+            "stack overflow"
+        ]
 
     def update_aliases(self, aliases: dict[str, str]) -> None:
         self._aliases.update(aliases)
 
-    def normalize(self, text: str) -> NormalizedResult | str:
-        """
-        Returns a NormalizedResult (which behaves like a string for legacy code
-        via __str__, but contains extracted metadata).
-        """
+    def _remove_fillers(self, text: str) -> str:
+        """Repeatedly remove fillers from start"""
+        while True:
+            new_text = self._filler_pattern.sub('', text).strip()
+            if new_text == text:
+                return text
+            text = new_text
+
+    def normalize(self, text: str) -> NormalizedResult:
         text = str(text).strip()
+
         if not text or len(text) < 2:
             return NormalizedResult(text="")
 
-        metadata = {}
+        metadata = {
+            "original": text
+        }
 
-        # 1. lowercase
         text = text.lower()
 
-        # 2. extract wake word (metadata preservation)
-        wake_match = self._wake_pattern.search(text)
+        # Wake word extraction
+        wake_match = self._wake_pattern.match(text)
         if wake_match:
-            metadata["wake_word"] = wake_match.group(1).strip()
+            metadata["wake_word"] = "jarvis"
             text = text[wake_match.end():].strip()
 
-        # 3. ASR fixes (safe word boundaries)
+        # ASR fixes
         for bad, good in self._asr_fixes.items():
             text = re.sub(rf'\b{bad}\b', good, text)
 
-        # 4. protect known phrases (before punct removal)
+        # Protect phrases (with word boundaries)
         for phrase in self._known_phrases:
-            if phrase in text:
-                protected = phrase.replace(" ", "_")
-                text = text.replace(phrase, protected)
+            pattern = rf'\b{re.escape(phrase)}\b'
+            text = re.sub(pattern, phrase.replace(" ", "_"), text)
 
-        # 5. remove punctuation
+        # Remove punctuation
         text = re.sub(r'[^\w\s_]', '', text)
 
-        # 6. remove fillers (only at start)
-        text = text.strip()
-        text = self._filler_pattern.sub('', text).strip()
+        # Remove fillers (multi-pass)
+        text = self._remove_fillers(text)
 
-        # 7. collapse spaces
+        # Normalize spacing
         text = " ".join(text.split())
 
-        # 8. alias + safe fuzzy + dedupe
         words = text.split()
         expanded = []
 
         valid_aliases = list(self._aliases.keys())
-        
+        fuzzy_used = False
+
         for w in words:
-            # Revert protected phrases
-            if "_" in w and w.replace("_", " ") in self._known_phrases:
+            # Restore phrases
+            if "_" in w:
                 expanded.extend(w.split("_"))
                 continue
 
             if w in self._aliases:
                 w = self._aliases[w]
+
             elif self._aliases and len(w) >= 4:
-                # Limit fuzzy matching to words >= 4 chars to prevent "note" -> "not"
-                match = difflib.get_close_matches(w, valid_aliases, n=1, cutoff=0.65)
+                match = difflib.get_close_matches(w, valid_aliases, n=1, cutoff=0.75)
                 if match:
                     w = self._aliases[match[0]]
-            
-            # Safe dedupe (only dedupe specific tokens, not everything)
-            if not expanded or expanded[-1] != w or w not in self._dedupe_tokens:
+                    fuzzy_used = True
+
+            # Smarter dedupe
+            if (
+                not expanded or
+                expanded[-1] != w or
+                w not in self._dedupe_tokens
+            ):
                 expanded.append(w)
 
         final_text = " ".join(expanded)
+
+        metadata["fuzzy_used"] = str(fuzzy_used)
+
         return NormalizedResult(text=final_text, metadata=metadata)
