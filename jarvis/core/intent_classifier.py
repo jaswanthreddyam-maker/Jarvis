@@ -357,88 +357,65 @@ class IntentClassifier:
         self._rules: list[FastRule] = [
 
             # ── 1. Search on a specific site ──────────────────────────────
-            # "search for lofi music on youtube"
-            # "search lofi music in youtube"
-            # "find dark souls on youtube"
-            # "look up python tutorials on github"
             FastRule(
                 name="search_on_site",
                 patterns=[
-                    _p(rf"(?:search(?:\s+for)?|find|look\s+up)\s+(?P<query>.+?)\s+(?:on|in)\s+(?P<site>{_sites})\s*\.?$"),
-                    _p(rf"(?P<site>{_sites})\s+search\s+(?:for\s+)?(?P<query>.+?)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:search(?:\s+for)?|find|look\s+up)\s+(?P<query>.+?)\s+(?:on|in)\s+(?P<site>{_sites})\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?P<site>{_sites})\s+search\s+(?:for\s+)?(?P<query>.+?)\s*\.?$"),
                 ],
                 handler=_h_search_on_site,
             ),
 
             # ── 2. Open a known URL in an optional browser ─────────────────
-            # "open youtube"
-            # "open youtube in chrome"
-            # "go to reddit in comet browser"
-            # "launch spotify"
             FastRule(
                 name="open_known_url",
                 patterns=[
-                    _p(rf"(?:open|go\s+to|launch|navigate\s+to|take\s+me\s+to)\s+(?P<site>{_sites})(?:\s+(?:in|using|with|on)\s+(?P<rest>.+?))?\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:open|go\s+to|launch|navigate\s+to|take\s+me\s+to)\s+(?:the\s+)?(?P<site>{_sites})(?:\s+(?:in|using|with|on)\s+(?P<rest>[a-zA-Z0-9_\- ]+))?\s*\.?$"),
                 ],
                 handler=_h_open_url,
             ),
 
             # ── 3. General web search (no site) ───────────────────────────
-            # "search for how to make pasta"
-            # "google best python libraries"
-            # "look up dark souls wiki"
             FastRule(
                 name="web_search",
                 patterns=[
-                    _p(r"(?:search(?:\s+for)?|google|look\s+up|find\s+online)\s+(?P<query>.+?)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:search(?:\s+for)?|google|look\s+up|find\s+online)\s+(?P<query>.+?)\s*\.?$"),
                 ],
                 handler=_h_web_search,
             ),
 
             # ── 4. Open known folder ───────────────────────────────────────
-            # "open downloads"
-            # "open my documents folder"
-            # "go to desktop"
             FastRule(
                 name="open_folder",
                 patterns=[
-                    _p(rf"(?:open|go\s+to|show\s+me)\s+(?:my\s+)?(?P<folder>{_folders})(?:\s+folder)?\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:open|go\s+to|show\s+me)\s+(?:my\s+)?(?P<folder>{_folders})(?:\s+folder)?\s*\.?$"),
                 ],
                 handler=_h_open_folder,
             ),
 
             # ── 5. Open an application ────────────────────────────────────
-            # "open notepad"
-            # "launch spotify"
-            # "start terminal"
-            # Must come AFTER url+folder rules so "open youtube" doesn't land here
             FastRule(
                 name="open_app",
                 patterns=[
-                    _p(r"(?:open|launch|start|run)\s+(?P<app>[a-zA-Z0-9_\- ]+?)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:open|launch|start|run)\s+(?P<app>[a-zA-Z0-9_\- ]+?)\s*\.?$"),
                 ],
                 handler=_h_open_app,
             ),
 
             # ── 6. Close an application ───────────────────────────────────
-            # "close spotify"
-            # "quit chrome"
             FastRule(
                 name="close_app",
                 patterns=[
-                    _p(r"(?:close|quit|exit|kill)\s+(?P<app>[a-zA-Z0-9_\- ]+?)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:close|quit|exit|kill)\s+(?P<app>[a-zA-Z0-9_\- ]+?)\s*\.?$"),
                 ],
                 handler=_h_close_app,
             ),
 
             # ── 7. Create folder ─────────────────────────────────────────
-            # "create a folder called Projects"
-            # "make a new folder named Work"
-            # "new folder MyStuff"
             FastRule(
                 name="create_folder",
                 patterns=[
-                    _p(r"(?:create|make|new)\s+(?:a\s+)?(?:new\s+)?folder\s+(?:called|named|:)?\s*(?P<name>[^\s].+?)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:create|make|new)\s+(?:a\s+)?(?:new\s+)?folder\s+(?:called|named|:)?\s*(?P<name>[a-zA-Z0-9_\- ]+?)\s*\.?$"),
                 ],
                 handler=_h_create_folder,
             ),
@@ -447,21 +424,20 @@ class IntentClassifier:
             FastRule(
                 name="delete_folder",
                 patterns=[
-                    _p(r"(?:delete|remove|trash)\s+(?:the\s+)?(?:folder\s+)?(?:called|named)?\s*(?P<name>[^\s].+?)\s+folder\s*\.?$"),
-                    _p(r"(?:delete|remove|trash)\s+(?:folder\s+)?(?:called\s+|named\s+)?(?P<name>[^\s].+?)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:delete|remove|trash)\s+(?:the\s+)?(?:folder\s+)?(?:called|named)?\s*(?P<name>[a-zA-Z0-9_\- ]+?)\s+folder\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:delete|remove|trash)\s+(?:folder\s+)?(?:called\s+|named\s+)?(?P<name>[a-zA-Z0-9_\- ]+?)\s*\.?$"),
                 ],
                 handler=_h_delete_folder,
             ),
 
             # ── 9. Volume ─────────────────────────────────────────────────
-            # "volume up" / "turn up the volume" / "mute" / "unmute"
             FastRule(
                 name="volume",
                 patterns=[
-                    _p(rf"(?:volume|vol)\s+(?P<direction>{_vol})\s*\.?$"),
-                    _p(rf"(?:turn|set)?\s*(?:the\s+)?(?:volume|vol)\s+(?P<direction>{_vol})\s*\.?$"),
-                    _p(rf"^(?P<direction>mute|unmute|silence)\s*\.?$"),
-                    _p(rf"^(?P<direction>louder|quieter)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:volume|vol)\s+(?P<direction>{_vol})\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:turn|set)?\s*(?:the\s+)?(?:volume|vol)\s+(?P<direction>{_vol})\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?P<direction>mute|unmute|silence)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?P<direction>louder|quieter)\s*\.?$"),
                 ],
                 handler=_h_volume,
             ),
@@ -470,8 +446,8 @@ class IntentClassifier:
             FastRule(
                 name="screenshot",
                 patterns=[
-                    _p(r"(?:take\s+a?\s*|capture\s+a?\s*|grab\s+a?\s*)?screenshot\s*\.?$"),
-                    _p(r"(?:take|capture|grab)\s+(?:a\s+)?(?:screenshot|screen\s+capture|screen\s+shot)\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:take\s+a?\s*|capture\s+a?\s*|grab\s+a?\s*)?screenshot\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:take|capture|grab)\s+(?:a\s+)?(?:screenshot|screen\s+capture|screen\s+shot)\s*\.?$"),
                 ],
                 handler=lambda text: _h_screenshot(text),
             ),
@@ -480,16 +456,16 @@ class IntentClassifier:
             FastRule(
                 name="clipboard_get",
                 patterns=[
-                    _p(r"(?:show|read|get|what(?:'s|\s+is)\s+(?:in\s+)?(?:my\s+)?(?:the\s+)?)clipboard\s*\.?$"),
-                    _p(r"(?:paste|show)\s+clipboard\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:show|read|get|what(?:'s|\s+is)\s+(?:in\s+)?(?:my\s+)?(?:the\s+)?)clipboard\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:paste|show)\s+clipboard\s*\.?$"),
                 ],
                 handler=lambda text: _h_clipboard_get(text),
             ),
             FastRule(
                 name="clipboard_set",
                 patterns=[
-                    _p(r"copy\s+(?P<content>.+?)\s+to\s+(?:the\s+)?clipboard\s*\.?$"),
-                    _p(r"(?:put|set)\s+(?P<content>.+?)\s+(?:in(?:to)?|on)\s+(?:the\s+)?clipboard\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*copy\s+(?P<content>.+?)\s+to\s+(?:the\s+)?clipboard\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:put|set)\s+(?P<content>.+?)\s+(?:in(?:to)?|on)\s+(?:the\s+)?clipboard\s*\.?$"),
                 ],
                 handler=_h_clipboard_set,
             ),
@@ -498,9 +474,9 @@ class IntentClassifier:
             FastRule(
                 name="get_time",
                 patterns=[
-                    _p(r"what(?:'s|\s+is)\s+(?:the\s+)?(?:current\s+)?(?:time|date|day)(?:\s+(?:now|today|right\s+now|is\s+it))?\s*[?\.]?\s*$"),
-                    _p(r"(?:tell\s+me\s+(?:the\s+)?)?(?:current\s+)?(?:time|date)\s*[?\.]?\s*$"),
-                    _p(r"what\s+(?:time|date|day)\s+is\s+it(?:\s+(?:now|today|right\s+now))?\s*[?\.]?\s*$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*what(?:'s|\s+is)\s+(?:the\s+)?(?:current\s+)?(?:time|date|day)(?:\s+(?:now|today|right\s+now|is\s+it))?\s*[?\.]?\s*$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:tell\s+me\s+(?:the\s+)?)?(?:current\s+)?(?:time|date)\s*[?\.]?\s*$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*what\s+(?:time|date|day)\s+is\s+it(?:\s+(?:now|today|right\s+now))?\s*[?\.]?\s*$"),
                 ],
                 handler=lambda text: _h_get_time(text),
             ),
@@ -509,8 +485,8 @@ class IntentClassifier:
             FastRule(
                 name="minimize",
                 patterns=[
-                    _p(r"minimize(?:\s+(?:this\s+)?(?:window|app))?\s*\.?$"),
-                    _p(r"(?:hide|minimise)(?:\s+(?:this\s+)?(?:window|app))?\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*minimize(?:\s+(?:this\s+)?(?:window|app))?\s*\.?$"),
+                    _p(rf"^(?:(?:please|can you|could you|would you|just)\s+)*(?:hide|minimise)(?:\s+(?:this\s+)?(?:window|app))?\s*\.?$"),
                 ],
                 handler=lambda text: _h_minimize(text),
             ),
