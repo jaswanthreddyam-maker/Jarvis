@@ -145,7 +145,7 @@ def _extract_browser(phrase: str) -> str | None:
     """Return canonical browser key if phrase contains a browser name."""
     p = _norm(phrase)
     for alias, key in sorted(_BROWSER_ALIASES.items(), key=lambda x: -len(x[0])):
-        if alias in p:
+        if re.search(rf'\b{re.escape(alias)}\b', p):
             return key
     return None
 
@@ -222,6 +222,9 @@ def _h_web_search(text: str, *, query: str) -> FastResult:
 def _h_open_app(text: str, *, app: str, rest: str = "") -> FastResult:
     """open <app>"""
     app_name = _norm(app)
+    # Protection: Do not treat known sites as desktop apps
+    if app_name in _KNOWN_URLS:
+        return _NO_MATCH
     return FastResult(
         matched=True,
         tool="open_app",
@@ -507,11 +510,7 @@ class IntentClassifier:
             for pattern in rule.patterns:
                 m = pattern.fullmatch(normalised)
                 if m is None:
-                    # Also try search (not fullmatch) for patterns that can
-                    # appear mid-string — but only for search rules
-                    m = pattern.search(normalised)
-                    if m is None:
-                        continue
+                    continue
 
                 groups = {k: v for k, v in m.groupdict().items() if v is not None}
                 try:

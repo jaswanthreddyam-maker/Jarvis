@@ -62,7 +62,8 @@ class DecisionEngine:
             )
 
         # Layer 0: Normalize
-        normalized_text = self._normalizer.normalize(raw_text)
+        normalized_result = self._normalizer.normalize(raw_text)
+        normalized_text = str(normalized_result)
         if not normalized_text:
             return RuntimeDecision(kind="ignore")
 
@@ -72,22 +73,26 @@ class DecisionEngine:
             return self._to_decision("execute_fast", cached_policy, command, normalized_text)
 
         # ── Tier 0: IntentClassifier (regex fast-path, <10ms) ─────────
-        fast = self._intent_classifier.classify(normalized_text)
-        if fast.matched:
-            # Synthesise an ActionPolicy so we can cache it
-            policy = ActionPolicy(
-                intent=fast.tool,
-                tool=fast.tool,
-                args=fast.args,
-                confidence=1.0,
-                permission_level="SAFE",
-            )
-            self._cache.set(normalized_text, policy)
-            logger.info(
-                "Tier-0 fast match: tool=%s args=%s (%.2f ms)",
-                fast.tool, fast.args, fast.elapsed_ms,
-            )
-            return self._to_decision("execute_fast", policy, command, normalized_text)
+        # Safety Gate: if normalization was unsafe (e.g. fuzzy match distortion), skip Tier 0
+        if not getattr(normalized_result, "metadata", {}).get("unsafe_normalization"):
+            fast = self._intent_classifier.classify(normalized_text)
+            if fast.matched:
+                # Synthesise an ActionPolicy so we can cache it
+                policy = ActionPolicy(
+                    intent=fast.tool,
+                    tool=fast.tool,
+                    args=fast.args,
+                    confidence=1.0,
+                    permission_level="SAFE",
+                )
+                self._cache.set(normalized_text, policy)
+                logger.info(
+                    "Tier-0 fast match: tool=%s args=%s (%.2f ms)",
+                    fast.tool, fast.args, fast.elapsed_ms,
+                )
+                return self._to_decision("execute_fast", policy, command, normalized_text)
+        else:
+            logger.info("Skipping Tier 0 due to unsafe normalization (fuzzy matching used).")
 
         tier_hint: dict[str, Any] = {"tier0_attempted": True, "tier0_confidence": "no_match"}
 
