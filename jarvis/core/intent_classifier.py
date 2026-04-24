@@ -30,7 +30,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Any
 from urllib.parse import quote_plus
 
 logger = logging.getLogger("Jarvis.IntentClassifier")

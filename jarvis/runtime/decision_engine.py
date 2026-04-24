@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from jarvis.core.intent_classifier import IntentClassifier
+from jarvis.core.intent_classifier import IntentClassifier, FastResult
 from jarvis.runtime.input_handler import RuntimeInput
 from jarvis.runtime.normalizer import InputNormalizer
 from jarvis.core.safety.prescreen import SafetyPreScreen
