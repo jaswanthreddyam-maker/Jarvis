@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class NormalizedResult:
     text: str
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def __str__(self) -> str:
         return self.text
@@ -18,6 +18,12 @@ class InputNormalizer:
     def __init__(self, aliases: dict[str, str] | None = None) -> None:
         self._aliases = aliases or {}
 
+        self._phrase_aliases = {
+            "vs code": "visual studio code",
+            "yt": "youtube",
+            "yt music": "youtube music",
+        }
+
         self._asr_fixes = {
             "jardubus": "jarvis",
             "woping": "open",
@@ -26,13 +32,8 @@ class InputNormalizer:
             "crome": "chrome",
         }
 
-        # Stronger wake pattern
-        self._wake_pattern = re.compile(
-            r'^(?:hey\s+|hi\s+)?jarvis[\s,]*',
-            re.IGNORECASE
-        )
+        self._wake_pattern = re.compile(r'^(?:hey\s+|hi\s+)?jarvis[\s,]*', re.IGNORECASE)
 
-        # Multi-pass filler removal
         self._filler_pattern = re.compile(
             r'^(please|can you|could you|would you|just|kindly|go ahead and|hey|hi|hello)\b\s*',
             re.IGNORECASE
@@ -40,90 +41,80 @@ class InputNormalizer:
 
         self._dedupe_tokens = {"open", "play", "go", "stop", "do", "search", "show"}
 
-        self._known_phrases = [
-            "google chrome",
-            "visual studio code",
-            "stack overflow"
-        ]
-
     def update_aliases(self, aliases: dict[str, str]) -> None:
         self._aliases.update(aliases)
 
     def _remove_fillers(self, text: str) -> str:
-        """Repeatedly remove fillers from start"""
         while True:
-            new_text = self._filler_pattern.sub('', text).strip()
-            if new_text == text:
+            new = self._filler_pattern.sub('', text).strip()
+            if new == text:
                 return text
-            text = new_text
+            text = new
 
     def normalize(self, text: str) -> NormalizedResult:
         text = str(text).strip()
 
-        if not text or len(text) < 2:
+        if not text:
             return NormalizedResult(text="")
 
         metadata = {
-            "original": text
+            "original": text,
+            "fuzzy_used": False,
+            "alias_used": False,
+            "token_map": [],
         }
 
         text = text.lower()
 
-        # Wake word extraction
-        wake_match = self._wake_pattern.match(text)
-        if wake_match:
+        # Wake word
+        match = self._wake_pattern.match(text)
+        if match:
             metadata["wake_word"] = "jarvis"
-            text = text[wake_match.end():].strip()
+            text = text[match.end():].strip()
 
         # ASR fixes
         for bad, good in self._asr_fixes.items():
             text = re.sub(rf'\b{bad}\b', good, text)
 
-        # Protect phrases (with word boundaries)
-        for phrase in self._known_phrases:
-            pattern = rf'\b{re.escape(phrase)}\b'
-            text = re.sub(pattern, phrase.replace(" ", "_"), text)
+        # Phrase aliases (CRITICAL)
+        for phrase, repl in self._phrase_aliases.items():
+            text = re.sub(rf'\b{re.escape(phrase)}\b', repl, text)
 
-        # Remove punctuation
-        text = re.sub(r'[^\w\s_]', '', text)
+        # Safe punctuation removal (allow path/URL chars)
+        text = re.sub(r'[^\w\s_\-.:/]', '', text)
 
-        # Remove fillers (multi-pass)
         text = self._remove_fillers(text)
-
-        # Normalize spacing
         text = " ".join(text.split())
 
         words = text.split()
         expanded = []
 
-        valid_aliases = list(self._aliases.keys())
-        fuzzy_used = False
+        keys = list(self._aliases.keys())
 
         for w in words:
-            # Restore phrases
-            if "_" in w:
-                expanded.extend(w.split("_"))
-                continue
+            original = w
 
+            # direct alias
             if w in self._aliases:
                 w = self._aliases[w]
+                metadata["alias_used"] = True
 
+            # controlled fuzzy
             elif self._aliases and len(w) >= 4:
-                match = difflib.get_close_matches(w, valid_aliases, n=1, cutoff=0.75)
-                if match:
+                match = difflib.get_close_matches(w, keys, n=1, cutoff=0.8)
+                if match and abs(len(w) - len(match[0])) <= 2:
                     w = self._aliases[match[0]]
-                    fuzzy_used = True
+                    metadata["fuzzy_used"] = True
 
-            # Smarter dedupe
-            if (
-                not expanded or
-                expanded[-1] != w or
-                w not in self._dedupe_tokens
-            ):
+            metadata["token_map"].append((original, w))
+
+            if not expanded or expanded[-1] != w or w not in self._dedupe_tokens:
                 expanded.append(w)
 
-        final_text = " ".join(expanded)
+        final = " ".join(expanded)
 
-        metadata["fuzzy_used"] = str(fuzzy_used)
+        # Safety flag for pipeline
+        if metadata["fuzzy_used"]:
+            metadata["unsafe_normalization"] = True
 
-        return NormalizedResult(text=final_text, metadata=metadata)
+        return NormalizedResult(text=final, metadata=metadata)
