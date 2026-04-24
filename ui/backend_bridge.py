@@ -365,17 +365,45 @@ class JarvisBackendBridge(QObject):
         for thread in self._threads:
             thread.wait(2000)
 
-    @Slot(str)
     def restart_module(self, target: str) -> None:
-        """Restart a specific module thread to recover from failure."""
+        """Restart a specific module thread to recover from failure.
+
+        IMPORTANT: All existing signal connections for the target are
+        disconnected BEFORE new connections are made.  Without this,
+        every restart_module() call adds *another* copy of each connection —
+        after 3 restarts every signal fires 4x.
+        """
         from PySide6.QtCore import Qt
         qc = Qt.ConnectionType.QueuedConnection
 
         self.state.add_log(f"Attempting partial recovery for {target}...", source="System")
+
+        def _safe_disconnect(*signals):
+            """Disconnect all receivers from each signal, ignoring RuntimeError
+            if the signal has no connections."""
+            for sig in signals:
+                try:
+                    sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+
         if target == "WakeListener":
             self.listener_continuous_stop_requested.emit()
             self.listener_stop_requested.emit()
             self.listener_shutdown_requested.emit()
+
+            # Disconnect every signal that was connected to the OLD listener.
+            _safe_disconnect(
+                self.listener_start_requested,
+                self.listener_stop_requested,
+                self.listener_continuous_start_requested,
+                self.listener_continuous_stop_requested,
+                self.listener_shutdown_requested,
+                self.listener_speaking_requested,
+                self.listener_device_requested,
+                self.listener_refresh_requested,
+            )
+
             if self._listener_thread is not None:
                 self._listener_thread.quit()
                 self._listener_thread.wait(2000)
@@ -387,8 +415,10 @@ class JarvisBackendBridge(QObject):
             thread.start()
             self._threads.append(thread)
             self._listener_thread = thread
-            
-            # Reconnect signals
+
+            # Re-add the manual-start listener (same-thread, DirectConnection).
+            self.listener_start_requested.connect(self._on_manual_start_requested)
+            # Reconnect signals to the NEW listener.
             self.listener_start_requested.connect(self._listener.start_listening, qc)
             self.listener_stop_requested.connect(self._listener.stop_listening, qc)
             self.listener_continuous_start_requested.connect(self._listener.start_listening_continuous, qc)
@@ -406,14 +436,24 @@ class JarvisBackendBridge(QObject):
             self._listener.log.connect(self._on_worker_log, qc)
             self._listener.error.connect(lambda message: self._handle_error("Listener", message), qc)
             self._listener.audio_captured.connect(self._asr.on_audio_captured, qc)
-            
+
             if self._wake_listener_enabled:
                 self.listener_continuous_start_requested.emit()
             if self._continuous_session:
                 QTimer.singleShot(120, self._resume_listening)
-                
+
         elif target == "TTSWorker":
             self.tts_stop_requested.emit()
+
+            # Disconnect TTS signals from old worker.
+            _safe_disconnect(
+                self.tts_init_requested,
+                self.tts_speak_requested,
+                self.tts_stop_requested,
+                self.tts_device_requested,
+                self.tts_refresh_requested,
+            )
+
             self._tts.deleteLater()
             self._tts = TTSWorker()
             thread = QThread(self)
@@ -422,7 +462,7 @@ class JarvisBackendBridge(QObject):
             thread.finished.connect(self._tts.deleteLater)
             thread.start()
             self._threads.append(thread)
-            
+
             self.tts_init_requested.connect(self._tts.initialize, qc)
             self.tts_speak_requested.connect(self._tts.speak, qc)
             self.tts_stop_requested.connect(self._tts.stop, qc)
@@ -435,8 +475,15 @@ class JarvisBackendBridge(QObject):
             self._tts.failed.connect(lambda message: self._handle_error("TTS", message), qc)
             self._tts.log.connect(self._on_worker_log, qc)
             self.tts_init_requested.emit()
-            
+
         elif target == "ASRWorker":
+            # Disconnect ASR signals from old worker.
+            _safe_disconnect(
+                self.asr_load_requested,
+                self.asr_background_wake_requested,
+                self.asr_transcribe_requested,
+            )
+
             self._asr.deleteLater()
             self._asr = ASRWorker()
             thread = QThread(self)
@@ -445,7 +492,7 @@ class JarvisBackendBridge(QObject):
             thread.finished.connect(self._asr.deleteLater)
             thread.start()
             self._threads.append(thread)
-            
+
             self.asr_load_requested.connect(self._asr.load_model, qc)
             self.asr_background_wake_requested.connect(self._asr.set_background_wake_enabled, qc)
             self.asr_transcribe_requested.connect(self._asr.transcribe, qc)

@@ -455,10 +455,10 @@ def load_settings(memory_db_path: Path | None = None) -> Settings:
             openai_model=_env_str("OPENAI_MODEL", str(model_config.get("online", "gpt-4o-mini"))),
             openai_base_url=_env_str("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             anthropic_api_key=_env_str("ANTHROPIC_API_KEY"),
-            anthropic_model=_env_str("ANTHROPIC_MODEL", "claude-3-haiku-20240307"),
+            anthropic_model=_env_str("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
             ollama_url=_env_str("OLLAMA_URL", "http://127.0.0.1:11434"),
             ollama_model=_env_str("OLLAMA_MODEL", str(model_config.get("planner", "llama3.2"))),
-            max_tokens=_env_int("JARVIS_PROVIDER_MAX_TOKENS", 150, minimum=1),
+            max_tokens=_env_int("JARVIS_PROVIDER_MAX_TOKENS", 2048, minimum=1),
             request_timeout_seconds=_env_float(
                 "JARVIS_PROVIDER_TIMEOUT_SECONDS",
                 float(runtime_config.get("request_timeout_seconds", 30.0)),

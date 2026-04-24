@@ -52,6 +52,16 @@ class TTS:
         but is now always treated as ``True``.
         """
         self._stop_event.clear()
+
+        # Check for stop before we even start — handles rapid stop→speak races.
+        if self._stop_event.is_set():
+            if self._on_finished is not None:
+                try:
+                    self._on_finished(True)
+                except Exception:
+                    pass
+            return
+
         if self._on_started is not None:
             try:
                 self._on_started()
@@ -67,10 +77,20 @@ class TTS:
         try:
             self._engine.say(text)
             self._engine.runAndWait()
-            interrupted = self._stop_event.is_set()
+        except RuntimeError:
+            # pyttsx3 raises RuntimeError("run loop already started") when
+            # stop() is called during runAndWait().  This is the expected
+            # interruption path on Windows SAPI5.
+            interrupted = True
         except Exception as exc:
             logger.warning("pyttsx3 speak error: %s", exc)
         finally:
+            # Check the stop event AFTER runAndWait returns — if stop() was
+            # called during playback, the event will be set even if
+            # runAndWait() returned normally (e.g. SAPI finished before we
+            # could check).
+            if self._stop_event.is_set():
+                interrupted = True
             if self._on_finished is not None:
                 try:
                     self._on_finished(interrupted)

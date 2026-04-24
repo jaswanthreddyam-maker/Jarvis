@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -97,14 +98,15 @@ class _TranscribeThread(QThread):
         self._python_exe = python_exe
 
     def run(self) -> None:
-        tmp_audio = None
-        tmp_script = None
+        tmp_audio_path: str | None = None
+        tmp_script_path: str | None = None
         try:
             started = time.perf_counter()
             # Save audio to a temp file so the subprocess can read it.
             tmp_audio = tempfile.NamedTemporaryFile(
                 suffix=".npy", delete=False
             )
+            tmp_audio_path = tmp_audio.name
             np.save(tmp_audio, self._audio)
             tmp_audio.close()
 
@@ -112,19 +114,20 @@ class _TranscribeThread(QThread):
             tmp_script = tempfile.NamedTemporaryFile(
                 suffix=".py", mode="w", delete=False, encoding="utf-8"
             )
+            tmp_script_path = tmp_script.name
             tmp_script.write(_WHISPER_SUBPROCESS_SCRIPT)
             tmp_script.close()
 
             request_payload = json.dumps({
                 "model": self._model_name,
-                "audio_path": tmp_audio.name,
+                "audio_path": tmp_audio_path,
                 "sample_rate": self._sample_rate,
             })
 
             self.log.emit("ASR", "[ASR] transcribing in subprocess...")
 
             proc = subprocess.run(
-                [self._python_exe, tmp_script.name, request_payload],
+                [self._python_exe, tmp_script_path, request_payload],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -161,16 +164,19 @@ class _TranscribeThread(QThread):
         except Exception as exc:
             self.transcribe_error.emit(self._request_id, f"Transcription error: {exc}")
         finally:
-            # Clean up temp files.
-            for path in (
-                tmp_audio.name if tmp_audio else None,
-                tmp_script.name if tmp_script else None,
-            ):
-                if path:
+            # Clean up temp files with retry for Windows PermissionError
+            # (subprocess may still hold the file handle briefly).
+            for path in (tmp_audio_path, tmp_script_path):
+                if not path:
+                    continue
+                for _attempt in range(5):
                     try:
                         os.unlink(path)
+                        break
+                    except PermissionError:
+                        time.sleep(0.1)  # subprocess still reading
                     except OSError:
-                        pass
+                        break
 
 
 class ASRWorker(QObject):
@@ -197,16 +203,26 @@ class ASRWorker(QObject):
                 str(audio_config.get("background_wake_interval_seconds", 1.75)),
             )
         )
-        self._stream_buffer: list[np.ndarray] = []
+        # Use a bounded deque to prevent unbounded memory growth during
+        # long background-wake sessions.
+        self._stream_buffer: deque[np.ndarray] = deque(maxlen=100)
         self._is_transcribing = False
         self._last_stream_decode_at = 0.0
         self._active_thread: _TranscribeThread | None = None
 
+        # Wake phrase deduplication state.
+        self._last_wake_text: str = ""
+        self._last_wake_time: float = 0.0
+
         # Resolve the python executable from the project venv.
-        venv_python = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            ".venv", "Scripts", "python.exe",
+        # Works on both Windows (Scripts/python.exe) and Unix (bin/python).
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
+        if sys.platform == "win32":
+            venv_python = os.path.join(project_root, ".venv", "Scripts", "python.exe")
+        else:
+            venv_python = os.path.join(project_root, ".venv", "bin", "python")
         self._python_exe = venv_python if os.path.isfile(venv_python) else sys.executable
 
     @Slot()
@@ -242,12 +258,17 @@ class ASRWorker(QObject):
             if len(self._stream_buffer) >= 50 and not self._is_transcribing:
                 now = time.perf_counter()
                 if now - self._last_stream_decode_at < self._stream_decode_interval:
-                    self._stream_buffer = self._stream_buffer[-25:]
+                    # Trim buffer to most recent 25 chunks (deque handles max, but
+                    # we still want to keep it tight for decode windows).
+                    while len(self._stream_buffer) > 25:
+                        self._stream_buffer.popleft()
                     return
                 self._last_stream_decode_at = now
                 self._is_transcribing = True
-                audio = np.concatenate(self._stream_buffer)
-                self._stream_buffer = self._stream_buffer[25:]
+                audio = np.concatenate(list(self._stream_buffer))
+                # Keep only recent chunks for next decode window.
+                while len(self._stream_buffer) > 25:
+                    self._stream_buffer.popleft()
                 self._process_stream(audio)
         except Exception as exc:
             print(f"[ASR] Stream error: {exc}")
@@ -279,8 +300,17 @@ class ASRWorker(QObject):
         if text:
             self.log.emit("ASR_LOOP", f"transcription: {text}")
             if contains_wake_phrase(text):
-                self.log.emit("ASR", "[ASR WAKE] detected wake phrase")
                 command = extract_command_after_wake(text)
+                # Deduplicate: don't fire wake_detected if the same text
+                # was emitted within the last 3 seconds.
+                now = time.perf_counter()
+                if (command == self._last_wake_text
+                        and now - self._last_wake_time < 3.0):
+                    self.log.emit("ASR", "[ASR WAKE] suppressed duplicate wake phrase")
+                    return
+                self._last_wake_text = command
+                self._last_wake_time = now
+                self.log.emit("ASR", "[ASR WAKE] detected wake phrase")
                 self.wake_detected.emit(command)
 
     def _on_stream_failed(self, _request_id: int, message: str) -> None:

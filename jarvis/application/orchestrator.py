@@ -132,7 +132,10 @@ class JarvisOrchestrator:
                     if len(plan.steps) == 1 and plan.intent not in ("unknown", "error", "planner_message"):
                         self._decision_engine.cache_intent(text, plan.intent, plan.steps[0].action, plan.steps[0].params)
                 except asyncio.TimeoutError:
-                    response = "Planning timed out. Is your LLM model running?"
+                    if getattr(self._settings, 'offline_mode', False):
+                        response = "Planning timed out. Is your local LLM model (Ollama) running?"
+                    else:
+                        response = "Planning timed out. The API request may have failed — check your network and API key."
                     snapshot = {
                         "status": "error",
                         "user_input": text,
@@ -199,6 +202,8 @@ class JarvisOrchestrator:
                 _tier_hint = getattr(decision, "tier_hint", None)
                 tier_source = (_tier_hint.get("resolved_by", "tier3") if isinstance(_tier_hint, dict) else "tier3")
                 self._feedback_loop.observe(text, plan, report, tier_source=tier_source)
+            # Record interaction in memory — including fast-path executions
+            # so they appear in conversation history and can be learned from.
             self._memory.add_interaction(text, report.response, metadata={"request_id": resolved_request_id, "success": report.success})
             self._publish_status(resolved_request_id, "responding")
             self._publish_response_chunks(resolved_request_id, report.response)

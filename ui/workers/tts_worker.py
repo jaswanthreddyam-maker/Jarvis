@@ -93,7 +93,7 @@ class TTSWorker(QObject):
                 return
             if self._engine is None:
                 self.initialize()
-            if self._engine is None:
+            if self._engine is None or not getattr(self._engine, "enabled", False):
                 self.failed.emit("TTS engine could not be initialized.")
                 self.speaking_finished.emit(True)
                 return
