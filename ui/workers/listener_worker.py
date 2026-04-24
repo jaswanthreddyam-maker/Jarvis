@@ -96,9 +96,18 @@ class ListenerWorker(QObject):
             self._active = False
             self._reset_capture()
             self.level_ready.emit(0.0)
-            self._close_stream()
+            # DO NOT close stream here. Keep microphone hot for continuous background audio
+            # and to avoid latency/dropouts when starting the next utterance.
         except Exception as exc:
             self.error.emit(f"Error stopping listener: {exc}")
+
+    @Slot()
+    def shutdown(self) -> None:
+        try:
+            self._active = False
+            self._close_stream()
+        except Exception as exc:
+            self.error.emit(f"Error shutting down listener: {exc}")
 
     @Slot(bool)
     def set_speaking_mode(self, speaking: bool) -> None:

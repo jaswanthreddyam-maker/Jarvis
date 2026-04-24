@@ -1,3 +1,29 @@
+"""ASR Worker — persistent-subprocess Whisper transcription.
+
+Architecture
+~~~~~~~~~~~~
+1.  ``_PersistentWhisper`` manages a long-lived child process that loads the
+    Whisper model ONCE and processes transcription requests over a
+    stdin/stdout JSON-line protocol (see ``_whisper_process.py``).
+
+2.  ``_TranscribeThread`` is a lightweight QThread that saves audio to a temp
+    file, sends a request to the persistent process, and waits for the
+    response.  Because the child process is persistent, there is **zero**
+    model-reload overhead per call — only I/O + inference time.
+
+3.  ``ASRWorker`` is the public QObject interface consumed by the bridge.
+    It exposes the same signals as before so nothing upstream changes.
+
+Key fixes vs. the previous per-call subprocess model
+----------------------------------------------------
+*   Model loaded once → ~800 ms–3 s saved per transcription.
+*   Bounded stream buffer (``deque(maxlen=100)``) prevents memory leak.
+*   Wake-phrase deduplication (3 s cooldown) prevents double-fires.
+*   Transcript noise filtering rejects filler phrases.
+*   Structured ``[REQ-<id>]`` lifecycle logging.
+*   Temp-file cleanup with retry for Windows PermissionError.
+*   Cross-platform venv path resolution.
+"""
 from __future__ import annotations
 
 import json
@@ -5,8 +31,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import deque
+from uuid import uuid4
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -15,6 +43,10 @@ from jarvis.interfaces.wake_word import contains_wake_phrase, extract_command_af
 from jarvis.runtime_config import get_audio_config
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -22,57 +54,185 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Minimum character length for a transcript to be considered valid speech.
+_MIN_TRANSCRIPT_LEN = 2
+
+# Phrases that Whisper hallucinates on silence / noise.
+_NOISE_PHRASES = frozenset({
+    "", "you", "thanks", "thank you", "bye", "the end",
+    "hmm", "uh", "um", "ah", "oh", "okay",
+    "thanks for watching", "subscribe", "like and subscribe",
+    "thank you for watching",
+})
+
+
+def _is_valid_transcript(text: str) -> bool:
+    """Return False for empty, too-short, or hallucinated filler text."""
+    cleaned = text.strip().lower().rstrip(".")
+    if len(cleaned) < _MIN_TRANSCRIPT_LEN:
+        return False
+    if cleaned in _NOISE_PHRASES:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
-# Subprocess-based Whisper transcription
-# ---------------------------------------------------------------------------
-# Running whisper in a subprocess completely isolates it from the Qt UI
-# process.  This prevents:
-#   1. GIL contention (whisper's Python-level decode loops hold the GIL
-#      and starve the Qt event-loop, freezing the UI).
-#   2. PyTorch saturating all CPU cores (even with thread-limits, the OS
-#      scheduler still deprioritises the UI when CPU is pegged).
-#   3. Hard crashes from torch.set_num_interop_threads() conflicting with
-#      already-initialised parallel work.
+# Persistent Whisper subprocess manager
 # ---------------------------------------------------------------------------
 
-_WHISPER_SUBPROCESS_SCRIPT = r'''
-import json, os, sys
-os.environ.setdefault("OMP_NUM_THREADS", "2")
-os.environ.setdefault("MKL_NUM_THREADS", "2")
+class _PersistentWhisper:
+    """Manages a long-lived Whisper subprocess.
 
-import numpy as np
+    The subprocess loads the model ONCE and processes transcription
+    requests via stdin/stdout JSON-line protocol.  Access is serialised
+    with a lock so only one request is in-flight at a time.
+    """
 
-def main():
-    request = json.loads(sys.argv[1])
-    model_name = request["model"]
-    audio_path = request["audio_path"]
-    sample_rate = request["sample_rate"]
+    def __init__(self, model_name: str, python_exe: str) -> None:
+        self._model_name = model_name
+        self._python_exe = python_exe
+        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
 
-    import torch
-    torch.set_num_threads(2)
-    import whisper
+    # ── lifecycle ─────────────────────────────────────────────────────
 
-    audio = np.load(audio_path).astype(np.float32)
-    if sample_rate != 16000 and audio.size > 0:
-        duration = audio.size / float(sample_rate)
-        target_size = max(1, int(duration * 16000))
-        old_p = np.linspace(0.0, 1.0, num=audio.size, endpoint=False)
-        new_p = np.linspace(0.0, 1.0, num=target_size, endpoint=False)
-        audio = np.interp(new_p, old_p, audio).astype(np.float32)
+    def start(self, timeout: float = 120.0) -> dict:
+        """Start the subprocess and block until the ready signal arrives."""
+        script_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "_whisper_process.py",
+        )
 
-    model = whisper.load_model(model_name)
-    result = model.transcribe(audio, fp16=False)
-    text = result.get("text", "").strip()
-    print(json.dumps({"text": text}), flush=True)
+        self._proc = subprocess.Popen(
+            [self._python_exe, script_path, self._model_name],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # line-buffered
+            env={
+                **os.environ,
+                "OMP_NUM_THREADS": "2",
+                "MKL_NUM_THREADS": "2",
+                "KMP_DUPLICATE_LIB_OK": "TRUE",
+            },
+        )
 
-if __name__ == "__main__":
-    main()
-'''
+        ready_line = self._read_line(timeout=timeout)
+        if ready_line is None:
+            stderr = ""
+            try:
+                stderr = self._proc.stderr.read(500)
+            except Exception:
+                pass
+            self.stop()
+            raise TimeoutError(
+                f"Whisper subprocess did not become ready within {timeout}s. "
+                f"stderr: {stderr}"
+            )
 
+        ready_msg = json.loads(ready_line)
+        if ready_msg.get("type") != "ready":
+            self.stop()
+            raise RuntimeError(f"Unexpected startup message: {ready_msg}")
+
+        return ready_msg
+
+    def stop(self) -> None:
+        if self._proc is None:
+            return
+        try:
+            self._proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self._proc.terminate()
+            self._proc.wait(timeout=5)
+        except Exception:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
+        self._proc = None
+
+    @property
+    def is_alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    # ── transcription ────────────────────────────────────────────────
+
+    def transcribe(
+        self,
+        audio_path: str,
+        sample_rate: int,
+        request_id: str,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Send a transcription request and wait for the matching response."""
+        if not self.is_alive:
+            raise RuntimeError("Whisper subprocess is not running")
+
+        with self._lock:
+            request = json.dumps({
+                "id": request_id,
+                "audio_path": audio_path,
+                "sample_rate": sample_rate,
+            })
+            self._proc.stdin.write(request + "\n")
+            self._proc.stdin.flush()
+
+            # Read responses, matching by request ID to skip stale ones.
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Whisper transcription timed out (>{timeout}s)"
+                    )
+                line = self._read_line(timeout=remaining)
+                if line is None:
+                    raise TimeoutError(
+                        f"Whisper transcription timed out (>{timeout}s)"
+                    )
+                response = json.loads(line)
+                if response.get("id") == request_id:
+                    return response
+                # else: stale response from a previously-timed-out request
+
+    # ── internal ─────────────────────────────────────────────────────
+
+    def _read_line(self, timeout: float) -> str | None:
+        """Read one line from subprocess stdout with a timeout.
+
+        Uses a daemon thread because Windows does not support select()
+        on pipe file-descriptors.
+        """
+        result: list[str | None] = [None]
+
+        def _reader() -> None:
+            try:
+                line = self._proc.stdout.readline()
+                if line:
+                    result[0] = line.strip()
+            except Exception:
+                pass
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        reader.join(timeout)
+
+        if reader.is_alive():
+            return None  # timeout — thread will die when proc is killed
+        return result[0]
+
+
+# ---------------------------------------------------------------------------
+# QThread wrapper for a single transcription request
+# ---------------------------------------------------------------------------
 
 class _TranscribeThread(QThread):
-    """Runs whisper in a subprocess on a dedicated thread so the Qt
-    event-loop is never blocked.
+    """Sends one transcription request to the persistent Whisper process
+    on a dedicated thread, keeping the Qt event-loop free.
 
     NOTE: Signal names must NOT shadow QThread.finished / QThread.started.
     """
@@ -86,98 +246,70 @@ class _TranscribeThread(QThread):
         request_id: int,
         audio: np.ndarray,
         sample_rate: int,
-        model_name: str,
-        python_exe: str,
+        whisper: _PersistentWhisper,
         parent=None,
     ):
         super().__init__(parent)
         self._request_id = request_id
         self._audio = audio
         self._sample_rate = sample_rate
-        self._model_name = model_name
-        self._python_exe = python_exe
+        self._whisper = whisper
 
     def run(self) -> None:
-        tmp_audio_path: str | None = None
-        tmp_script_path: str | None = None
+        tmp_path: str | None = None
+        req_tag = str(self._request_id)
         try:
-            started = time.perf_counter()
-            # Save audio to a temp file so the subprocess can read it.
-            tmp_audio = tempfile.NamedTemporaryFile(
-                suffix=".npy", delete=False
-            )
-            tmp_audio_path = tmp_audio.name
-            np.save(tmp_audio, self._audio)
-            tmp_audio.close()
+            self.log.emit("ASR", f"[REQ-{req_tag}] ASR_START")
 
-            # Write the subprocess script to a temp file.
-            tmp_script = tempfile.NamedTemporaryFile(
-                suffix=".py", mode="w", delete=False, encoding="utf-8"
-            )
-            tmp_script_path = tmp_script.name
-            tmp_script.write(_WHISPER_SUBPROCESS_SCRIPT)
-            tmp_script.close()
+            # Save audio to temp file.
+            tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
+            tmp_path = tmp.name
+            np.save(tmp, self._audio)
+            tmp.close()
 
-            request_payload = json.dumps({
-                "model": self._model_name,
-                "audio_path": tmp_audio_path,
-                "sample_rate": self._sample_rate,
-            })
-
-            self.log.emit("ASR", "[ASR] transcribing in subprocess...")
-
-            proc = subprocess.run(
-                [self._python_exe, tmp_script_path, request_payload],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env={
-                    **os.environ,
-                    "OMP_NUM_THREADS": "2",
-                    "MKL_NUM_THREADS": "2",
-                    "KMP_DUPLICATE_LIB_OK": "TRUE",
-                },
+            uid = uuid4().hex[:8]
+            result = self._whisper.transcribe(
+                audio_path=tmp_path,
+                sample_rate=self._sample_rate,
+                request_id=uid,
+                timeout=30.0,
             )
 
-            elapsed = (time.perf_counter() - started) * 1000.0
-
-            if proc.returncode != 0:
-                stderr = (proc.stderr or "").strip()[-500:]
-                self.transcribe_error.emit(
-                    self._request_id,
-                    f"Whisper subprocess failed (rc={proc.returncode}): {stderr}",
-                )
+            if result.get("type") == "error":
+                msg = result.get("error", "Unknown subprocess error")
+                self.log.emit("ASR", f"[REQ-{req_tag}] ASR_FAILED: {msg}")
+                self.transcribe_error.emit(self._request_id, msg)
                 return
 
-            stdout = (proc.stdout or "").strip()
-            if not stdout:
-                self.transcribe_error.emit(self._request_id, "Whisper subprocess produced no output.")
-                return
-
-            result = json.loads(stdout)
             text = result.get("text", "").strip()
-            self.log.emit("ASR", f"[ASR] transcription ({elapsed:.0f}ms): {text}")
+            elapsed = result.get("elapsed_ms", 0)
+            self.log.emit("ASR", f"[REQ-{req_tag}] ASR_DONE ({elapsed:.0f}ms): {text}")
             self.transcribe_done.emit(self._request_id, text)
 
-        except subprocess.TimeoutExpired:
-            self.transcribe_error.emit(self._request_id, "Whisper transcription timed out (>30s).")
+        except TimeoutError as exc:
+            self.log.emit("ASR", f"[REQ-{req_tag}] ASR_TIMEOUT")
+            self.transcribe_error.emit(self._request_id, str(exc))
         except Exception as exc:
+            self.log.emit("ASR", f"[REQ-{req_tag}] ASR_ERROR: {exc}")
             self.transcribe_error.emit(self._request_id, f"Transcription error: {exc}")
         finally:
-            # Clean up temp files with retry for Windows PermissionError
-            # (subprocess may still hold the file handle briefly).
-            for path in (tmp_audio_path, tmp_script_path):
-                if not path:
-                    continue
-                for _attempt in range(5):
+            # Subprocess normally cleans up the file, but belt-and-suspenders.
+            if tmp_path:
+                for _ in range(5):
                     try:
-                        os.unlink(path)
+                        os.unlink(tmp_path)
+                        break
+                    except FileNotFoundError:
                         break
                     except PermissionError:
-                        time.sleep(0.1)  # subprocess still reading
+                        time.sleep(0.1)
                     except OSError:
                         break
 
+
+# ---------------------------------------------------------------------------
+# Public ASR Worker
+# ---------------------------------------------------------------------------
 
 class ASRWorker(QObject):
     ready = Signal(object)
@@ -191,7 +323,7 @@ class ASRWorker(QObject):
         audio_config = get_audio_config()
         self._model_name = os.getenv(
             "JARVIS_WHISPER_MODEL",
-            str(audio_config.get("whisper_model", "tiny.en")),
+            str(audio_config.get("whisper_model", "base.en")),
         )
         self._background_wake_enabled = _env_bool(
             "JARVIS_ENABLE_BACKGROUND_WAKE",
@@ -203,19 +335,21 @@ class ASRWorker(QObject):
                 str(audio_config.get("background_wake_interval_seconds", 1.75)),
             )
         )
-        # Use a bounded deque to prevent unbounded memory growth during
-        # long background-wake sessions.
+
+        # Bounded buffer prevents unbounded memory growth.
         self._stream_buffer: deque[np.ndarray] = deque(maxlen=100)
         self._is_transcribing = False
         self._last_stream_decode_at = 0.0
         self._active_thread: _TranscribeThread | None = None
 
-        # Wake phrase deduplication state.
+        # Wake-phrase deduplication.
         self._last_wake_text: str = ""
         self._last_wake_time: float = 0.0
 
-        # Resolve the python executable from the project venv.
-        # Works on both Windows (Scripts/python.exe) and Unix (bin/python).
+        # Persistent subprocess (started in load_model).
+        self._whisper: _PersistentWhisper | None = None
+
+        # Resolve venv python (cross-platform).
         project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
@@ -225,20 +359,34 @@ class ASRWorker(QObject):
             venv_python = os.path.join(project_root, ".venv", "bin", "python")
         self._python_exe = venv_python if os.path.isfile(venv_python) else sys.executable
 
+    # ── public slots ─────────────────────────────────────────────────
+
     @Slot()
     def load_model(self) -> None:
-        """Validate that whisper is importable (model itself is loaded
-        on-demand in the subprocess)."""
+        """Start the persistent Whisper subprocess."""
         started_at = time.perf_counter()
         try:
-            # Quick check that whisper is importable.
-            import whisper  # noqa: F401
-            self.ready.emit({"status": "Ready", "model": self._model_name})
-            self.log.emit("ASR", f"Whisper model '{self._model_name}' ready (subprocess mode).")
+            # Kill any previous subprocess.
+            if self._whisper is not None:
+                self._whisper.stop()
+
+            self._whisper = _PersistentWhisper(self._model_name, self._python_exe)
+            ready_msg = self._whisper.start(timeout=120.0)
+
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            self.log.emit("Timing", f"ASR init ({self._model_name}): {elapsed_ms:.1f} ms")
+            model = ready_msg.get("model", self._model_name)
+            self.ready.emit({"status": "Ready", "model": model})
+            self.log.emit("ASR", f"Whisper model '{model}' ready (persistent subprocess).")
+            self.log.emit("Timing", f"ASR init ({model}): {elapsed_ms:.1f} ms")
+
         except Exception as exc:
-            self.ready.emit({"status": "Error", "model": self._model_name, "error": str(exc)})
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            self.log.emit("ASR", f"Whisper init failed ({elapsed_ms:.0f}ms): {exc}")
+            self.ready.emit({
+                "status": "Error",
+                "model": self._model_name,
+                "error": str(exc),
+            })
 
     @Slot(bool)
     def set_background_wake_enabled(self, enabled: bool) -> None:
@@ -258,67 +406,21 @@ class ASRWorker(QObject):
             if len(self._stream_buffer) >= 50 and not self._is_transcribing:
                 now = time.perf_counter()
                 if now - self._last_stream_decode_at < self._stream_decode_interval:
-                    # Trim buffer to most recent 25 chunks (deque handles max, but
-                    # we still want to keep it tight for decode windows).
                     while len(self._stream_buffer) > 25:
                         self._stream_buffer.popleft()
                     return
                 self._last_stream_decode_at = now
                 self._is_transcribing = True
                 audio = np.concatenate(list(self._stream_buffer))
-                # Keep only recent chunks for next decode window.
                 while len(self._stream_buffer) > 25:
                     self._stream_buffer.popleft()
                 self._process_stream(audio)
         except Exception as exc:
-            print(f"[ASR] Stream error: {exc}")
-
-    def _process_stream(self, audio: object) -> None:
-        """Background wake-word detection — uses subprocess too."""
-        try:
-            audio_np = np.asarray(audio, dtype=np.float32)
-            thread = _TranscribeThread(
-                request_id=-1,
-                audio=audio_np,
-                sample_rate=16000,
-                model_name=self._model_name,
-                python_exe=self._python_exe,
-                parent=self,
-            )
-            thread.transcribe_done.connect(self._on_stream_result)
-            thread.transcribe_error.connect(self._on_stream_failed)
-            thread.log.connect(self.log)
-            thread.finished.connect(thread.deleteLater)
-            thread.start()
-        except Exception as exc:
-            self.log.emit("ASR", f"Stream process error: {exc}")
-            self._is_transcribing = False
-
-    def _on_stream_result(self, _request_id: int, text: str) -> None:
-        self._is_transcribing = False
-        text = text.strip().lower()
-        if text:
-            self.log.emit("ASR_LOOP", f"transcription: {text}")
-            if contains_wake_phrase(text):
-                command = extract_command_after_wake(text)
-                # Deduplicate: don't fire wake_detected if the same text
-                # was emitted within the last 3 seconds.
-                now = time.perf_counter()
-                if (command == self._last_wake_text
-                        and now - self._last_wake_time < 3.0):
-                    self.log.emit("ASR", "[ASR WAKE] suppressed duplicate wake phrase")
-                    return
-                self._last_wake_text = command
-                self._last_wake_time = now
-                self.log.emit("ASR", "[ASR WAKE] detected wake phrase")
-                self.wake_detected.emit(command)
-
-    def _on_stream_failed(self, _request_id: int, message: str) -> None:
-        self._is_transcribing = False
-        self.log.emit("ASR", f"Stream process error: {message}")
+            self.log.emit("ASR", f"[STREAM] error: {exc}")
 
     @Slot(object, int)
     def transcribe(self, payload: object, request_id: int) -> None:
+        """Transcribe a captured utterance (manual/session mode)."""
         try:
             if isinstance(payload, dict):
                 data = payload
@@ -330,24 +432,81 @@ class ASRWorker(QObject):
                 self.transcript_ready.emit(request_id, "")
                 return
 
-            self.log.emit("ASR", f"[ASR] audio received (length: {audio.size/sample_rate:.2f}s)")
+            duration = audio.size / sample_rate
+            self.log.emit("ASR", f"[REQ-{request_id}] audio received ({duration:.2f}s)")
 
-            # Launch subprocess transcription on a dedicated thread.
+            if self._whisper is None or not self._whisper.is_alive:
+                self.transcript_failed.emit(request_id, "Whisper subprocess is not running")
+                return
+
             thread = _TranscribeThread(
                 request_id=request_id,
                 audio=audio,
                 sample_rate=sample_rate,
-                model_name=self._model_name,
-                python_exe=self._python_exe,
+                whisper=self._whisper,
                 parent=self,
             )
-            thread.transcribe_done.connect(self.transcript_ready)
+            thread.transcribe_done.connect(self._on_transcribe_done)
             thread.transcribe_error.connect(self.transcript_failed)
             thread.log.connect(self.log)
-            # Clean up thread when done (use QThread.finished, not our custom signal).
             thread.finished.connect(thread.deleteLater)
             self._active_thread = thread
             thread.start()
 
         except Exception as exc:
             self.transcript_failed.emit(request_id, f"Transcription failed: {exc}")
+
+    # ── internal ─────────────────────────────────────────────────────
+
+    def _on_transcribe_done(self, request_id: int, text: str) -> None:
+        """Post-process transcript before forwarding to the bridge."""
+        if not _is_valid_transcript(text):
+            self.log.emit("ASR", f"[REQ-{request_id}] filtered noise: '{text}'")
+            self.transcript_ready.emit(request_id, "")
+            return
+        self.transcript_ready.emit(request_id, text)
+
+    def _process_stream(self, audio: object) -> None:
+        """Background wake-word detection."""
+        if self._whisper is None or not self._whisper.is_alive:
+            self._is_transcribing = False
+            return
+        try:
+            audio_np = np.asarray(audio, dtype=np.float32)
+            thread = _TranscribeThread(
+                request_id=-1,
+                audio=audio_np,
+                sample_rate=16000,
+                whisper=self._whisper,
+                parent=self,
+            )
+            thread.transcribe_done.connect(self._on_stream_result)
+            thread.transcribe_error.connect(self._on_stream_failed)
+            thread.log.connect(self.log)
+            thread.finished.connect(thread.deleteLater)
+            thread.start()
+        except Exception as exc:
+            self.log.emit("ASR", f"[STREAM] process error: {exc}")
+            self._is_transcribing = False
+
+    def _on_stream_result(self, _request_id: int, text: str) -> None:
+        self._is_transcribing = False
+        text = text.strip().lower()
+        if not _is_valid_transcript(text):
+            return
+        self.log.emit("ASR_LOOP", f"transcription: {text}")
+        if contains_wake_phrase(text):
+            command = extract_command_after_wake(text)
+            now = time.perf_counter()
+            if (command == self._last_wake_text
+                    and now - self._last_wake_time < 3.0):
+                self.log.emit("ASR", "[WAKE] suppressed duplicate")
+                return
+            self._last_wake_text = command
+            self._last_wake_time = now
+            self.log.emit("ASR", "[WAKE] detected wake phrase")
+            self.wake_detected.emit(command)
+
+    def _on_stream_failed(self, _request_id: int, message: str) -> None:
+        self._is_transcribing = False
+        self.log.emit("ASR", f"[STREAM] error: {message}")

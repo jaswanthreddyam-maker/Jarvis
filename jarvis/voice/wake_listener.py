@@ -14,6 +14,3 @@ class WakeListener(ListenerWorker):
     def stop_listening_continuous(self) -> None:
         self.stop_listening()
 
-    def shutdown(self) -> None:
-        self.stop_listening()
-

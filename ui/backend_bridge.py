@@ -277,7 +277,10 @@ class JarvisBackendBridge(QObject):
 
     @Slot()
     def cancel_active(self) -> None:
+        if self.state.status == Status.IDLE and self._active_request_id is None:
+            return  # Already idle, prevent duplicate cancel
         self._continuous_session = False
+        req_id = self._active_request_id
         self._cancel_active_request()
         self.listener_stop_requested.emit()
         self.listener_speaking_requested.emit(False)
@@ -286,7 +289,8 @@ class JarvisBackendBridge(QObject):
         self.state.set_mic_level(0.0)
         self.state.set_session_running(False)
         self._set_status(Status.IDLE)
-        self.state.add_log("Active request cancelled.", source="Bridge")
+        log_msg = f"[REQ-{req_id}] CANCELLED by user." if req_id else "Active request cancelled."
+        self.state.add_log(log_msg, source="Bridge")
 
     @Slot(str)
     def submit_text(self, text: str) -> None:
@@ -318,7 +322,7 @@ class JarvisBackendBridge(QObject):
         self.state.set_transcript(cleaned)
         self.state.set_response("")
         self._set_status(Status.PROCESSING)
-        self.state.add_log(f"[CHAT] Text submitted: {cleaned}", source="Chat")
+        self.state.add_log(f"[REQ-{request_id}] TEXT_SUBMITTED: {cleaned}", source="Chat")
         self.backend_process_requested.emit(request_id, cleaned)
 
     @Slot()
@@ -543,6 +547,7 @@ class JarvisBackendBridge(QObject):
         self._pending_transcripts.pop(request_id, None)
         self._request_contexts.pop(request_id, None)
         self.backend_cancel_requested.emit(request_id)
+        self.state.add_log(f"[REQ-{request_id}] BACKEND_CANCELLED", source="Bridge")
         self._active_request_id = None
 
     def _prune_cancelled_requests(self, request_id: int) -> None:
@@ -704,6 +709,7 @@ class JarvisBackendBridge(QObject):
         self._active_request_id = request_id
         self._cancelled_requests.discard(request_id)
         self._request_contexts[request_id] = _RequestContext(origin="voice", text="")
+        self.state.add_log(f"[REQ-{request_id}] LISTENING_DONE", source="Listener")
         self.asr_transcribe_requested.emit(payload_data, request_id)
 
     @Slot(str)
@@ -764,7 +770,7 @@ class JarvisBackendBridge(QObject):
         self.state.set_transcript(text)
         self.state.set_response("")
         self._set_status(Status.THINKING)
-        self.state.add_log(f"Recognized: {text}", source="ASR")
+        self.state.add_log(f"[REQ-{request_id}] BACKEND_SENT: {text}", source="Bridge")
         self.backend_process_requested.emit(request_id, text)
 
     def _on_backend_request_phase(self, request_id: int, phase: str, payload: object) -> None:
@@ -836,7 +842,7 @@ class JarvisBackendBridge(QObject):
 
         self.state.append_turn(user_text, final_response)
         self.state.set_response(final_response)
-        self.state.add_log("Backend response ready.", source="Backend")
+        self.state.add_log(f"[REQ-{request_id}] BACKEND_RESPONSE", source="Backend")
         self.text_response_ready.emit(final_response)
 
         if context is not None and context.origin == "text":
@@ -867,12 +873,19 @@ class JarvisBackendBridge(QObject):
     def _on_tts_started(self, text: str) -> None:
         if self._continuous_session:
             self.listener_speaking_requested.emit(True)
+        if self._active_request_id is not None:
+            self.state.add_log(f"[REQ-{self._active_request_id}] TTS_START", source="Bridge")
         preview = text if len(text) < 80 else text[:77] + "..."
         self.state.add_log(f"Speaking: {preview}", source="TTS")
 
     def _on_tts_finished(self, interrupted: bool) -> None:
-        self.listener_speaking_requested.emit(False)
+        if self._active_request_id is not None:
+            self.state.add_log(f"[REQ-{self._active_request_id}] TTS_DONE", source="Bridge")
+            self._active_request_id = None
+        
+        self.state.add_log(f"TTS playback finished (interrupted={interrupted}).", source="Bridge")
         self._active_request_id = None
+        self.listener_speaking_requested.emit(False)
         if self.state.status in {Status.RECOGNIZING, Status.THINKING, Status.PROCESSING, Status.EXECUTING}:
             return
         if interrupted:
