@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from config.settings import Settings, load_settings
-from jarvis.application.controller import JarvisApplication
+
+if TYPE_CHECKING:
+    from jarvis.application.controller import JarvisApplication
+from jarvis.core.intent_classifier import IntentClassifier
 from jarvis.runtime.background_tasks import NotificationPump
-from jarvis.runtime.decision_engine import DecisionEngine
+from jarvis.runtime.decision_engine import DecisionEngine, RuntimeDecision
 from jarvis.runtime.execution_engine import ExecutionEngine
-from jarvis.runtime.input_handler import TextInputHandler, VoiceInputHandler
+from jarvis.runtime.execution_types import ExecutionCommand, NoOpIntent, OpenIntent, PlayIntent, SearchIntent
+from jarvis.runtime.input_handler import RuntimeInput, TextInputHandler, VoiceInputHandler
 from jarvis.runtime.output_handler import OutputHandler
 from jarvis.runtime.task_manager import RuntimeTaskManager
 
@@ -41,11 +45,14 @@ class RuntimeController:
         self._application = application
         self._logger = logger
         self._settings = settings or load_settings()
-        self._decision_engine = decision_engine or getattr(application.orchestrator, "_decision_engine", None)
+        orchestrator = getattr(application, "orchestrator", None)
+        self._decision_engine = decision_engine or getattr(orchestrator, "decision_engine", getattr(orchestrator, "_decision_engine", None))
         self._execution_engine = execution_engine or ExecutionEngine(
             application,
             timeout_seconds=self._settings.api.request_timeout_seconds,
             logger=logger,
+            planner=getattr(application, "execution_planner", None),
+            classifier=getattr(application, "intent_classifier", None) or IntentClassifier(),
         )
         self._task_manager = task_manager or RuntimeTaskManager(
             max_concurrent_requests=self._settings.resources.max_concurrent_requests,
@@ -53,10 +60,19 @@ class RuntimeController:
         self._notification_pump = notification_pump or NotificationPump(application)
         self._session_loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
+        self._metrics: dict[str, int] = {
+            "planner_bypass_count": 0,
+        }
 
     async def run(self, options: RuntimeOptions) -> None:
         output = OutputHandler()
         output.print_banner()
+
+        # NOTE: Hotkey launcher is deliberately NOT started here.
+        # In full mode, input flows through UI → WebSocket → Backend.
+        # In browser mode, the launcher is started by browser_main.py.
+        # This prevents duplicate orchestrator execution paths.
+
         try:
             if options.test_mode:
                 await self._run_test_mode(output)
@@ -92,7 +108,7 @@ class RuntimeController:
         persona = build_persona(self._settings)
         legacy_memory = getattr(self._application, "memory", None)
         if legacy_memory is None and hasattr(self._application, "orchestrator"):
-            legacy_memory = getattr(self._application.orchestrator, "_memory", None)
+            legacy_memory = getattr(self._application.orchestrator, "memory", getattr(self._application.orchestrator, "_memory", None))
 
         memory = build_companion_memory(self._settings, legacy_memory)
         llm_handler = await build_llm_handler(self._application)
@@ -165,7 +181,7 @@ class RuntimeController:
         persona = build_persona(self._settings)
         legacy_memory = getattr(self._application, "memory", None)
         if legacy_memory is None and hasattr(self._application, "orchestrator"):
-            legacy_memory = getattr(self._application.orchestrator, "_memory", None)
+            legacy_memory = getattr(self._application.orchestrator, "memory", getattr(self._application.orchestrator, "_memory", None))
 
         memory = build_companion_memory(self._settings, legacy_memory)
         llm_handler = await build_llm_handler(self._application)
@@ -195,7 +211,7 @@ class RuntimeController:
 
     async def _run_test_mode(self, output: OutputHandler) -> None:
         response = await self._execution_engine.execute(
-            "search the web for 'python automation' and write the results to a file named 'demo_search.txt'",
+            ExecutionCommand.for_text("search the web for 'python automation' and write the results to a file named 'demo_search.txt'"),
             request_id=self._new_request_id(),
         )
         await output.respond_async(response)
@@ -285,11 +301,14 @@ class RuntimeController:
                     self._stop_event.set()
                 await input_queue.put(None)
                 break
-            decision = self._decision_engine.decide(command)
-            if decision.kind == "ignore":
-                continue
-            if decision.interrupted:
-                self._cancel_latest_request()
+            if self._decision_engine is None:
+                decision = command
+            else:
+                decision = self._decision_engine.decide(command)
+                if decision.kind == "ignore":
+                    continue
+                if decision.interrupted:
+                    self._cancel_latest_request()
             output.show_input(decision)
             await input_queue.put(decision)
 
@@ -327,8 +346,18 @@ class RuntimeController:
         output_queue: asyncio.Queue[tuple[str, str] | None],
     ) -> None:
         try:
+            if isinstance(decision, RuntimeDecision) and decision.kind == "execute_fast" and decision.execution_intent is not None:
+                register_hint = getattr(self._execution_engine, "register_intent_hint", None)
+                if callable(register_hint):
+                    register_hint(
+                        request_id,
+                        text=decision.text,
+                        intent=decision.execution_intent,
+                        confidence=decision.confidence,
+                        kind=decision.kind,
+                    )
             response = await self._execution_engine.execute(
-                decision,
+                self._to_execution_command(decision),
                 request_id=request_id,
             )
             if response:
@@ -396,3 +425,26 @@ class RuntimeController:
     @staticmethod
     def _new_request_id() -> str:
         return uuid4().hex
+
+    def _to_execution_command(self, decision: Any = None) -> ExecutionCommand:
+        legacy_static_call = not isinstance(self, RuntimeController)
+        if legacy_static_call:
+            decision = self if decision is None else decision
+        if isinstance(decision, ExecutionCommand):
+            return decision
+        if isinstance(decision, RuntimeDecision):
+            if decision.kind == "execute_fast" and decision.execution_intent is not None:
+                if legacy_static_call:
+                    return ExecutionCommand.for_intent(decision.execution_intent, source_text=decision.text)
+                self._metrics["planner_bypass_count"] += 1
+                self._logger.info(
+                    "Fast-path intent routed through planner. Historical bypass hits: %d",
+                    self._metrics["planner_bypass_count"],
+                )
+                return ExecutionCommand.for_text(decision.text)
+            return ExecutionCommand.for_text(decision.text)
+        if isinstance(decision, RuntimeInput):
+            return ExecutionCommand.for_text(decision.text)
+        if isinstance(decision, str):
+            return ExecutionCommand.for_text(decision)
+        raise TypeError(f"Unsupported runtime decision payload: {type(decision).__name__}")
