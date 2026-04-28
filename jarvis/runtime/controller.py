@@ -434,8 +434,6 @@ class RuntimeController:
             return decision
         if isinstance(decision, RuntimeDecision):
             if decision.kind == "execute_fast" and decision.execution_intent is not None:
-                if legacy_static_call:
-                    return ExecutionCommand.for_intent(decision.execution_intent, source_text=decision.text)
                 self._metrics["planner_bypass_count"] += 1
                 self._logger.info(
                     "Fast-path intent routed through planner. Historical bypass hits: %d",

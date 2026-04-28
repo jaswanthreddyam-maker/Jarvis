@@ -36,6 +36,17 @@ from urllib.parse import quote_plus
 logger = logging.getLogger("Jarvis.IntentClassifier")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Runtime-facing compatibility types
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class ClassifiedIntent:
+    intent: Any
+    confidence: float = 1.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Result type
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -560,3 +571,33 @@ class IntentClassifier:
         elapsed = (time.perf_counter() - t0) * 1000
         logger.debug("[FastTier] No match — falling through to LLM planner (%.2f ms)", elapsed)
         return _NO_MATCH
+
+    # ---------------------------------------------------------------------
+    # Runtime execution pipeline compatibility helpers
+    # ---------------------------------------------------------------------
+
+    def classify_intent(self, text: str) -> ClassifiedIntent | None:
+        """Return a runtime ExecutionIntent for fast-tier matches."""
+        result = self.classify(text)
+        if not result.matched:
+            return None
+        try:
+            from jarvis.runtime.execution_types import OpenIntent, OrchestratorStepIntent
+        except Exception:
+            return None
+
+        tool = str(result.tool or "").strip()
+        args = dict(result.args or {})
+        intent: Any | None = None
+        if tool == "open_url":
+            intent = OpenIntent(target=str(args.get("url") or "").strip())
+        else:
+            # Fallback: preserve the action/params for tool executor path.
+            intent = OrchestratorStepIntent(step_obj={"action": tool, "target": "", "params": args})
+        return ClassifiedIntent(intent=intent, confidence=float(result.confidence or 1.0))
+
+    def classify_with_confidence(self, text: str) -> tuple[Any | None, float]:
+        classified = self.classify_intent(text)
+        if classified is None:
+            return None, 0.0
+        return classified.intent, float(classified.confidence)
